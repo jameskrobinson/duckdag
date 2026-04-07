@@ -257,10 +257,12 @@ def _handle_load_file(
         df = pd.read_parquet(p, **extra)
     elif suffix in (".xlsx", ".xls"):
         df = pd.read_excel(p, **extra)
+    elif suffix == ".dta":
+        df = pd.read_stata(p, **extra)
     else:
         raise ValueError(
             f"Node '{node.id}' (load_file): unsupported file format '{suffix}'. "
-            "Expected .csv, .parquet, .xlsx, or .xls"
+            "Expected .csv, .parquet, .xlsx, .xls, or .dta"
         )
 
     if node.output is not None:
@@ -274,10 +276,16 @@ def _handle_load_odbc(
     store: IntermediateStore,
     templates_dir: Path | None,
 ) -> None:
-    """Load data from a named ODBC connection into a DataFrame.
+    """Load data from an ODBC connection into a DataFrame.
 
-    Params:
-        odbc_key: Key into ``spec.odbc`` identifying the connection config.
+    Connection resolution order:
+    1. ``connection_string`` param — used as-is if present.
+    2. ``odbc_key`` param — looks up a named connection in ``spec.odbc``.
+    3. Inline params — ``driver``, ``server``, ``database``, ``uid``, ``pwd``,
+       ``trusted``, ``dsn`` are read directly from ``node.params``.
+
+    The node must have a Jinja2 SQL template. Any additional params on the node
+    are passed through to the template render context.
     """
     try:
         import pyodbc  # type: ignore[import-untyped]
@@ -286,16 +294,39 @@ def _handle_load_odbc(
             "pyodbc is required for load_odbc nodes. Install it with: pip install pyodbc"
         ) from None
 
-    odbc_key: str = node.params.get("odbc_key", "")
-    if not odbc_key:
-        raise ValueError(f"Node '{node.id}' (load_odbc): missing 'odbc_key' param")
-    if odbc_key not in spec.odbc:
-        raise KeyError(
-            f"Node '{node.id}': ODBC key '{odbc_key}' not found in spec.odbc. "
-            f"Available keys: {list(spec.odbc)}"
-        )
+    # --- Resolve connection string ---
+    conn_str: str | None = node.params.get("connection_string") or None
 
-    conn_str = _build_odbc_conn_str(spec.odbc[odbc_key])
+    if conn_str is None:
+        odbc_key: str = node.params.get("odbc_key", "")
+        if odbc_key:
+            if odbc_key not in spec.odbc:
+                raise KeyError(
+                    f"Node '{node.id}': ODBC key '{odbc_key}' not found in spec.odbc. "
+                    f"Available keys: {list(spec.odbc)}"
+                )
+            conn_str = _build_odbc_conn_str(spec.odbc[odbc_key])
+        else:
+            # Build from inline params
+            _INLINE_CONN_KEYS = {"driver", "server", "database", "uid", "pwd", "trusted", "dsn"}
+            if not any(node.params.get(k) for k in _INLINE_CONN_KEYS):
+                raise ValueError(
+                    f"Node '{node.id}' (load_odbc): no connection configured. "
+                    "Provide 'connection_string', 'odbc_key', or inline params "
+                    "(driver, server, database, uid, pwd, trusted, dsn)."
+                )
+            from pipeline_core.resolver.models import ODBCConnectionConfig
+            cfg = ODBCConnectionConfig(
+                dsn=node.params.get("dsn") or None,
+                driver=node.params.get("driver") or None,
+                server=node.params.get("server") or None,
+                database=node.params.get("database") or None,
+                uid=node.params.get("uid") or None,
+                pwd=node.params.get("pwd") or None,
+                trusted=node.params.get("trusted"),
+            )
+            conn_str = _build_odbc_conn_str(cfg)
+
     sql = _render_template(node, templates_dir)
 
     with pyodbc.connect(conn_str) as odbc_conn:

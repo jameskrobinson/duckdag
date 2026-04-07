@@ -107,9 +107,10 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         type="load_odbc",
         label="Load from ODBC",
         description=(
-            "Execute a SQL template against a named ODBC connection and load the "
-            "result as a DataFrame. The connection is looked up from the pipeline's "
-            "odbc: config block."
+            "Execute a SQL template against an ODBC connection and load the result as a DataFrame. "
+            "Specify connection details inline (driver, server, database, etc.) or reference a "
+            "named connection from the pipeline's odbc: config block via odbc_key. "
+            "Use ${env.xxx} references for sensitive values such as passwords."
         ),
         category="load",
         needs_template=True,
@@ -119,8 +120,62 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ParamSchema(
                 name="odbc_key",
                 type="string",
-                required=True,
-                description="Key into the pipeline's odbc: config block (e.g. 'my_db').",
+                required=False,
+                description=(
+                    "Named connection from the pipeline's odbc: config block. "
+                    "If set, all inline connection params below are ignored."
+                ),
+            ),
+            ParamSchema(
+                name="connection_string",
+                type="string",
+                required=False,
+                description=(
+                    "Full ODBC connection string (e.g. 'DRIVER={ODBC Driver 17 for SQL Server};SERVER=…'). "
+                    "If set, takes precedence over all other connection params."
+                ),
+            ),
+            ParamSchema(
+                name="driver",
+                type="string",
+                required=False,
+                description="ODBC driver name, e.g. 'ODBC Driver 17 for SQL Server'.",
+            ),
+            ParamSchema(
+                name="server",
+                type="string",
+                required=False,
+                description="Server hostname or IP address. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="database",
+                type="string",
+                required=False,
+                description="Database name.",
+            ),
+            ParamSchema(
+                name="trusted",
+                type="boolean",
+                required=False,
+                description="Use Windows trusted authentication (Trusted_Connection=yes).",
+            ),
+            ParamSchema(
+                name="uid",
+                type="string",
+                required=False,
+                description="Username. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="pwd",
+                type="password",
+                required=False,
+                description="Password. Use ${env.xxx} to avoid storing credentials in pipeline.yaml.",
+            ),
+            ParamSchema(
+                name="dsn",
+                type="string",
+                required=False,
+                description="Data Source Name (DSN) — alternative to specifying driver/server/database.",
             ),
         ],
         accepts_template_params=True,
@@ -131,7 +186,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         description=(
             "Load a local file into a DataFrame. "
             "Format is inferred from the file extension: "
-            ".csv, .parquet, .xlsx, .xls."
+            ".csv, .parquet, .xlsx, .xls, .dta (Stata)."
         ),
         category="load",
         needs_template=False,
@@ -148,7 +203,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
                 name="format",
                 type="string",
                 required=False,
-                description="File format: 'csv', 'parquet', 'xlsx', 'xls'. Inferred from extension if omitted.",
+                description="File format: 'csv', 'parquet', 'xlsx', 'xls', 'dta'. Inferred from extension if omitted.",
             ),
         ],
         accepts_template_params=False,

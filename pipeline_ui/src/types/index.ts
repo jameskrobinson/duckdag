@@ -14,7 +14,7 @@ export interface NodeOutputSchema {
 // Node types from GET /node-types
 export interface ParamSchema {
   name: string
-  type: 'string' | 'integer' | 'boolean' | 'list' | 'dict' | 'any' | 'number' | string
+  type: 'string' | 'integer' | 'boolean' | 'list' | 'dict' | 'any' | 'number' | 'password' | string
   required: boolean
   description: string
   default: unknown

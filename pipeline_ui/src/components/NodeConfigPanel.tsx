@@ -569,6 +569,13 @@ function ParamField({
           style={styles.textarea}
           placeholder="JSON"
         />
+      ) : param.type === 'password' ? (
+        <VarAutocompleteInput
+          value={strVal}
+          onChange={(v) => onChange(v)}
+          placeholder={param.default != null ? String(param.default) : ''}
+          inputType="password"
+        />
       ) : (
         <VarAutocompleteInput
           value={strVal}
@@ -588,10 +595,12 @@ function VarAutocompleteInput({
   value,
   onChange,
   placeholder,
+  inputType = 'text',
 }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
+  inputType?: 'text' | 'password'
 }) {
   const variableNames = useContext(VariableNamesContext)
   const [showDropdown, setShowDropdown] = useState(false)
@@ -643,7 +652,7 @@ function VarAutocompleteInput({
     <div style={{ position: 'relative' }}>
       <input
         ref={inputRef}
-        type="text"
+        type={inputType}
         value={value}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
