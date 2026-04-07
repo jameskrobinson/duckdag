@@ -1,0 +1,6 @@
+node_type: load_file
+label: Load prices CSV
+description: Load the sample prices CSV from the workspace data directory
+params:
+  path: "../../data/prices.csv"
+  format: csv

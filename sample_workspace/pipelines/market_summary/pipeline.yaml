@@ -1,0 +1,113 @@
+# Market Summary Pipeline
+#
+# Loads the local prices CSV, enriches each asset with change classification
+# and market-cap tier, then produces two outputs:
+#   - top_movers.csv  — assets sorted by absolute 24h price move
+#   - sector_summary.csv — aggregated view by sector and market tier
+#
+# Variables (overridable via variables.yaml or --vars):
+#   significant_move_pct  — threshold for "strong" classification  (default: 5.0)
+#   large_cap_threshold   — USD market cap for large-cap tier       (default: 50B)
+#   mid_cap_threshold     — USD market cap for mid-cap tier         (default: 5B)
+
+duckdb:
+  path: session.duckdb
+
+templates:
+  dir: ../../templates
+
+variable_declarations:
+  - name: significant_move_pct
+    type: number
+    default: 5.0
+    description: "Absolute % change above which a move is classified as 'strong'"
+  - name: large_cap_threshold
+    type: number
+    default: 50000000000
+    description: "USD market cap threshold for large-cap classification"
+  - name: mid_cap_threshold
+    type: number
+    default: 5000000000
+    description: "USD market cap threshold for mid-cap classification"
+
+nodes:
+
+  # ── 1. Load raw prices ──────────────────────────────────────────────────
+  - id: raw_prices
+    type: load_file
+    inputs: []
+    output: raw_prices
+    description: "Load prices CSV from the workspace data directory"
+    params:
+      path: "../../data/prices.csv"
+      format: csv
+
+  # ── 2. Classify price changes ───────────────────────────────────────────
+  - id: with_change_class
+    type: pandas_transform
+    inputs:
+      - raw_prices
+    output: with_change_class
+    description: "Add direction / magnitude / change_class columns"
+    params:
+      transform: transforms.enrichment.classify_change
+      column: change_24h_pct
+      strong_threshold: ${variables.significant_move_pct}
+      moderate_threshold: 2.0
+      flat_threshold: 0.1
+
+  # ── 3. Add market-cap tier ──────────────────────────────────────────────
+  - id: enriched
+    type: pandas_transform
+    inputs:
+      - with_change_class
+    output: enriched
+    description: "Add market_tier column (large / mid / small / micro)"
+    params:
+      transform: transforms.enrichment.add_market_tier
+      market_cap_column: market_cap_usd
+      large_cap: ${variables.large_cap_threshold}
+      mid_cap: ${variables.mid_cap_threshold}
+      small_cap: 500000000
+
+  # ── 4. Top movers (SQL) ─────────────────────────────────────────────────
+  - id: top_movers
+    type: sql_transform
+    inputs:
+      - enriched
+    output: top_movers
+    description: "Rank assets by absolute 24h move; return top 10"
+    template: top_movers.sql
+    params:
+      limit: 10
+
+  # ── 5. Sector summary (SQL) ─────────────────────────────────────────────
+  - id: sector_summary
+    type: sql_transform
+    inputs:
+      - enriched
+    output: sector_summary
+    description: "Aggregate by sector and market-cap tier"
+    template: sector_summary.sql
+
+  # ── 6. Export top movers ────────────────────────────────────────────────
+  - id: export_top_movers
+    type: sql_exec
+    inputs:
+      - top_movers
+    description: "Write top movers to CSV"
+    template: export_csv.sql
+    params:
+      source_table: top_movers
+      output_path: "../../output/top_movers.csv"
+
+  # ── 7. Export sector summary ────────────────────────────────────────────
+  - id: export_sector_summary
+    type: sql_exec
+    inputs:
+      - sector_summary
+    description: "Write sector summary to CSV"
+    template: export_csv.sql
+    params:
+      source_table: sector_summary
+      output_path: "../../output/sector_summary.csv"

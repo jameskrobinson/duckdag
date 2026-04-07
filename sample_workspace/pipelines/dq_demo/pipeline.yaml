@@ -1,0 +1,77 @@
+# DQ Demo Pipeline
+#
+# Exercises all four DQ check types (row_count, null_rate, value_range, unique)
+# and the data contract (schema) validation.
+#
+# The checks on raw_prices are deliberately generous so they all pass.
+# Edit the thresholds to test failure cases (e.g. set min_rows: 99999).
+#
+# The pipeline.schema.json intentionally mismatches the actual change_24h_pct
+# dtype (recorded as 'integer', actual is 'float64') to trigger a CONTRACT: warning
+# on the classify_change node.
+
+duckdb:
+  path: session.duckdb
+
+templates:
+  dir: ../../templates
+
+schema_path: pipeline.schema.json
+
+nodes:
+
+  # ── 1. Load prices with all four DQ check types ─────────────────────────
+  - id: raw_prices
+    type: load_file
+    inputs: []
+    output: raw_prices
+    description: "Load prices CSV — DQ checks: row count, null rate, value range, unique"
+    params:
+      path: "../../data/prices.csv"
+    dq_checks:
+      - type: row_count
+        name: has_rows
+        min_rows: 1
+        max_rows: 10000
+      - type: null_rate
+        name: no_null_symbols
+        column: symbol
+        max_null_rate: 0.0
+      - type: value_range
+        name: positive_price
+        column: price_usd
+        min_value: 0
+      - type: unique
+        name: unique_symbols
+        column: symbol
+
+  # ── 2. Classify price changes (triggers CONTRACT: warning) ───────────────
+  - id: classify_change
+    type: pandas_transform
+    inputs:
+      - raw_prices
+    output: classify_change
+    description: "Classify change magnitude — schema mismatch will trigger CONTRACT: warning"
+    params:
+      transform: transforms.enrichment.classify_change
+      column: change_24h_pct
+      strong_threshold: 5.0
+      moderate_threshold: 2.0
+      flat_threshold: 0.1
+    dq_checks:
+      - type: row_count
+        name: same_row_count
+        min_rows: 1
+      - type: null_rate
+        name: no_null_classification
+        column: change_class
+        max_null_rate: 0.0
+
+  # ── 3. Sector summary (no DQ checks — tests node without checks) ─────────
+  - id: sector_summary
+    type: sql_transform
+    inputs:
+      - classify_change
+    output: sector_summary
+    description: "Aggregate by sector — no DQ checks configured"
+    template: dq_sector_summary.sql

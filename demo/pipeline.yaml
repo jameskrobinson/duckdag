@@ -1,0 +1,73 @@
+# Demo pipeline — CoinGecko crypto market data
+#
+# Fetches the top 20 cryptocurrencies by market cap, cleans and renames
+# columns, then writes a summary CSV sorted by 24h price change.
+#
+# Run from this directory:
+#   pipeline run pipeline.yaml --workspace .. --verbose
+#
+# Output: crypto_summary.csv in the current working directory.
+
+duckdb:
+  path: demo.duckdb
+
+templates:
+  dir: templates
+
+nodes:
+
+  # ── 1. Load ──────────────────────────────────────────────────────────────
+  - id: load_prices
+    type: load_rest_api
+    inputs: []
+    output: load_prices
+    description: "Top 20 coins by market cap from CoinGecko (no API key required)"
+    params:
+      url: "https://api.coingecko.com/api/v3/coins/markets"
+      method: GET
+      params:
+        vs_currency: usd
+        order: market_cap_desc
+        per_page: 20
+        page: 1
+        sparkline: false
+      timeout: 20
+
+  # ── 2. Select and rename columns ─────────────────────────────────────────
+  - id: clean_cols
+    type: pandas_transform
+    inputs:
+      - load_prices
+    output: clean_cols
+    description: "Keep the six columns we care about, rename to clean names"
+    params:
+      transform: pipeline_core.transforms.basic.select_rename
+      select:
+        - name
+        - symbol
+        - market_cap_rank
+        - current_price
+        - market_cap
+        - price_change_percentage_24h
+      rename:
+        current_price: price_usd
+        market_cap: market_cap_usd
+        market_cap_rank: rank
+        price_change_percentage_24h: change_24h_pct
+
+  # ── 3. Sort by absolute 24h change (SQL) ─────────────────────────────────
+  - id: sorted_movers
+    type: sql_transform
+    inputs:
+      - clean_cols
+    output: sorted_movers
+    description: "Cast types, sort by absolute 24h % change to surface biggest movers"
+    template: sort_movers.sql
+
+  # ── 4. Export to CSV ──────────────────────────────────────────────────────
+  - id: export_csv
+    type: sql_exec
+    inputs:
+      - sorted_movers
+    description: "Write final dataset to crypto_summary.csv"
+    template: export_csv.sql

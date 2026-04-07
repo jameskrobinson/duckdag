@@ -1,0 +1,11 @@
+symbol,quantity,cost_basis_usd,current_price_usd,total_cost_usd,current_value_usd,pnl_usd,pnl_pct,pnl_class,sector,market_tier
+BTC,0.45,52000.0,67420.15,23400.0,30339.07,6939.07,29.7,strong_gain,Layer1,large
+ETH,3.2,2800.0,3512.8,8960.0,11240.96,2280.96,25.5,strong_gain,Layer1,large
+SOL,25.0,120.0,172.45,3000.0,4311.25,1311.25,43.7,strong_gain,Layer1,large
+LINK,150.0,12.5,18.45,1875.0,2767.5,892.5,47.6,strong_gain,Infrastructure,mid
+NEAR,300.0,5.5,7.89,1650.0,2367.0,717.0,43.5,strong_gain,Layer1,mid
+SUI,1000.0,1.2,1.567,1200.0,1567.0,367.0,30.6,strong_gain,Layer1,small
+UNI,80.0,8.9,11.23,712.0,898.4,186.4,26.2,strong_gain,DeFi,mid
+AAVE,5.0,75.0,98.76,375.0,493.8,118.8,31.7,strong_gain,DeFi,small
+OP,200.0,2.1,2.456,420.0,491.2,71.2,17.0,gain,Layer2,small
+ARB,500.0,1.5,1.234,750.0,617.0,-133.0,-17.7,loss,Layer2,small

@@ -1,0 +1,34 @@
+[project]
+name = "pipeline-service"
+version = "0.1.0"
+description = "FastAPI service — pipeline intelligence and mediation layer"
+authors = [
+    { name = "James Robinson", email = "james.k.robinson@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.0",
+    "duckdb>=0.10",
+    "pyyaml>=6.0",
+    "anthropic>=0.25",
+    "pipeline-core",
+]
+
+[tool.uv.sources]
+pipeline-core = { path = "../pipeline_core", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.27",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

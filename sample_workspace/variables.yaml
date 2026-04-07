@@ -1,0 +1,13 @@
+# Workspace-level variables shared across all pipelines.
+# Override sensitive values in env.yaml (never commit env.yaml).
+
+# Paths — relative to the workspace root when used in pipeline YAML.
+data_dir: "data"
+
+# Thresholds used by the market_summary pipeline
+significant_move_pct: 3.0       # % change considered a "significant" mover
+large_cap_threshold: 50000000000  # $50B market cap = large cap
+mid_cap_threshold: 5000000000    # $5B market cap = mid cap
+
+# Output settings
+output_dir: "output"

@@ -1,0 +1,24 @@
+[project]
+name = "pipeline-cli"
+version = "0.1.0"
+description = "CLI for running data pipelines"
+readme = "README.md"
+authors = [
+    { name = "James Robinson", email = "james.k.robinson@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pipeline-core",
+    "click>=8.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+pipeline = "pipeline_cli.main:cli"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+pipeline-core = { path = "../pipeline_core", editable = true }

@@ -1,0 +1,11 @@
+mover_rank,symbol,name,sector,market_tier,price_usd,change_24h_pct,change_class,market_cap_bn
+1,AAVE,Aave,DeFi,small,98.76,8.91,strong_gain,1.5
+2,SUI,Sui,Layer1,small,1.567,7.82,strong_gain,1.9
+3,UNI,Uniswap,DeFi,mid,11.23,6.34,strong_gain,8.5
+4,SOL,Solana,Layer1,large,172.45,5.67,strong_gain,78.5
+5,APT,Aptos,Layer1,small,10.45,-5.23,strong_loss,4.9
+6,OP,Optimism,Layer2,small,2.456,4.89,strong_gain,2.1
+7,LINK,Chainlink,Infrastructure,mid,18.45,4.56,strong_gain,10.8
+8,NEAR,NEAR Protocol,Layer1,mid,7.89,3.67,strong_gain,8.2
+9,COMP,Compound,DeFi,small,67.34,-3.45,strong_loss,0.6
+10,ADA,Cardano,Layer1,mid,0.4712,3.21,strong_gain,16.7
