@@ -31,7 +31,7 @@ import SessionPanel from './components/SessionPanel'
 import TransformEditorPanel from './components/TransformEditorPanel'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
-import { createRun, createSession, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchTemplates, fetchVariableDeclarations, fetchWorkspaceVariables, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
+import { createRun, createSession, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchTemplates, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
 import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, VariableDeclaration } from './types'
 
 const nodeTypes: NodeTypes = {
@@ -288,7 +288,7 @@ export default function App() {
     e.dataTransfer.dropEffect = 'move'
   }
 
-  function onDrop(e: React.DragEvent) {
+  async function onDrop(e: React.DragEvent) {
     e.preventDefault()
     const raw = e.dataTransfer.getData('application/pipeline-node-type')
     if (!raw) return
@@ -305,6 +305,38 @@ export default function App() {
     const id = nextId()
     const defaultParams = payload._defaultParams ?? {}
 
+    // Resolve template path: if the dropped template lives outside the current pipeline
+    // directory, copy its SQL into the pipeline's own templates/ folder so edits don't
+    // modify the shared workspace template.
+    let resolvedTemplateFile = payload._templateFile
+    let resolvedTemplatePath = payload._templatePath
+
+    if (payload._templatePath && payload._templateFile && pipelineDir) {
+      const normalSrc = payload._templatePath.replace(/\\/g, '/')
+      const normalPipelineDir = pipelineDir.replace(/\\/g, '/')
+      const isAlreadyLocal = normalSrc.startsWith(normalPipelineDir + '/')
+
+      if (!isAlreadyLocal) {
+        // Give this drop its own unique filename so two nodes from the same workspace
+        // template get independent files and edits don't bleed across.
+        // Pattern: {basename}_{nodeId}{ext}  e.g. sector_summary_node_3.sql.j2
+        const dotIdx = payload._templateFile.indexOf('.')
+        const base = dotIdx >= 0 ? payload._templateFile.slice(0, dotIdx) : payload._templateFile
+        const ext  = dotIdx >= 0 ? payload._templateFile.slice(dotIdx) : ''
+        const uniqueFilename = `${base}_${id}${ext}`
+        const destPath = `${normalPipelineDir}/templates/${uniqueFilename}`
+        try {
+          const { content } = await fetchWorkspaceFile(payload._templatePath)
+          await writeWorkspaceFile(destPath, content)
+          resolvedTemplatePath = destPath
+          resolvedTemplateFile = uniqueFilename
+        } catch {
+          // Fall back to workspace path — at least the content is still readable
+          console.warn(`Could not copy template to pipeline dir: ${destPath}`)
+        }
+      }
+    }
+
     const newNode: Node<BuilderNodeData> = {
       id,
       type: 'pipelineNode',
@@ -315,8 +347,8 @@ export default function App() {
         description: null,
         output_schema: null,
         params: defaultParams,
-        template_file: payload._templateFile,
-        template_path: payload._templatePath,
+        template_file: resolvedTemplateFile,
+        template_path: resolvedTemplatePath,
       },
     }
     pushHistory()

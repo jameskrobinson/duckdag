@@ -213,10 +213,23 @@ export default function NodeConfigPanel({
         description: templateDesc.trim() || data.description || '',
         params: { ...params },
       }
-      if (data.template_file) templateObj.template_file = data.template_file
+
+      // If this node has SQL, bundle it alongside the YAML in node_templates/.
+      // The backend's _local_from_yaml_files resolves template_path as:
+      //   {workspace}/node_templates/{template_file}
+      // so the SQL file must live there, not in the originating pipeline's templates/ dir.
+      if ((isSqlNode || isSqlParamNode) && sqlContent.trim()) {
+        const sqlFilename = `${slug}.sql.j2`
+        const sqlPath = `${workspace}/node_templates/${sqlFilename}`
+        await writeWorkspaceFile(sqlPath, sqlContent)
+        templateObj.template_file = sqlFilename
+      } else if (data.template_file) {
+        // Non-SQL node with a template file reference — keep the reference but note
+        // that it may not be portable if the file doesn't exist in node_templates/.
+        templateObj.template_file = data.template_file
+      }
+
       const content = yaml.dump(templateObj, { lineWidth: 120 })
-      // Ensure node_templates dir path — writeWorkspaceFile only needs the file to exist in an existing dir,
-      // but the dir may not exist yet; we write via the service which checks parent exists.
       const path = `${workspace}/node_templates/${slug}.yaml`
       await writeWorkspaceFile(path, content)
       setTemplateSaved(true)
