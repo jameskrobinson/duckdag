@@ -23,6 +23,8 @@ interface WorkspaceBarProps {
   onRedo?: () => void
   /** Name of the currently loaded pipeline, e.g. "market_summary". "Untitled" when not loaded. */
   pipelineName?: string
+  /** When set, shows a "New" button to create a new pipeline in the workspace. */
+  onNewPipeline?: () => void
 }
 
 /**
@@ -48,6 +50,7 @@ export default function WorkspaceBar({
   onUndo,
   onRedo,
   pipelineName,
+  onNewPipeline,
 }: WorkspaceBarProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(workspace)
@@ -104,6 +107,11 @@ export default function WorkspaceBar({
         >
           ↪
         </button>
+        {onNewPipeline && (
+          <button onClick={onNewPipeline} style={{ ...styles.btn, ...styles.newBtn }} title="Create a new pipeline in the workspace">
+            ✦ New
+          </button>
+        )}
         <button onClick={onLoad} style={styles.btn} title="Load a pipeline from workspace">
           ↑ Load
         </button>
@@ -276,6 +284,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#89b4fa22',
     border: '1px solid #89b4fa44',
     color: '#89b4fa',
+  },
+  newBtn: {
+    background: '#cba6f722',
+    border: '1px solid #cba6f744',
+    color: '#cba6f7',
   },
   historyBtn: {
     padding: '4px 8px',

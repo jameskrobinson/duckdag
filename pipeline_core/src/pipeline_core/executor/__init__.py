@@ -194,17 +194,25 @@ def _handle_load_duckdb(
         query: An arbitrary SQL query (mutually exclusive with ``table``).
         path: Optional path to an external DuckDB file. If omitted, uses the
               pipeline's own session database.
+
+    When the preview endpoint injects ``_sql_override`` into ``node.params``
+    (for interactive SQL editing), that value is used as the query directly,
+    bypassing the ``table``/``query`` params.
     """
+    sql_override: str | None = node.params.get("_sql_override") or None
     table: str | None = node.params.get("table")
     query: str | None = node.params.get("query")
     path: str | None = node.params.get("path")
 
-    if table and query:
+    if sql_override:
+        # Interactive SQL draft — bypass normal table/query validation
+        pass
+    elif table and query:
         raise ValueError(f"Node '{node.id}' (load_duckdb): specify 'table' or 'query', not both")
-    if not table and not query:
+    elif not table and not query:
         raise ValueError(f"Node '{node.id}' (load_duckdb): must specify 'table' or 'query'")
 
-    sql = query if query else f'SELECT * FROM "{table}"'
+    sql = sql_override if sql_override else (query if query else f'SELECT * FROM "{table}"')
 
     if path:
         # Attach the external file read-only, query it, then detach.

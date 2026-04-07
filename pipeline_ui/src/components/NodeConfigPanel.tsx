@@ -8,7 +8,10 @@ import NodeOutputPreview from './NodeOutputPreview'
 /** Context so ParamField can access variable names without prop drilling */
 const VariableNamesContext = createContext<string[]>([])
 
-const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec'])
+// Template-based SQL nodes: SQL lives in a .sql.j2 file, loaded from workspace
+const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec', 'load_odbc'])
+// Param-based SQL nodes: SQL lives in the 'query' param (no template file)
+const SQL_PARAM_NODE_TYPES = new Set(['load_duckdb'])
 
 interface NodeConfigPanelProps {
   nodeId: string
@@ -89,9 +92,16 @@ export default function NodeConfigPanel({
   const [sqlSaveError, setSqlSaveError] = useState<string | null>(null)
   const [sqlDirty, setSqlDirty] = useState(false)
   const isSqlNode = SQL_NODE_TYPES.has(data.node_type)
+  const isSqlParamNode = SQL_PARAM_NODE_TYPES.has(data.node_type)
   const templatePath = data.template_path as string | undefined
 
+  // Load SQL content: from file for template-based nodes, from 'query' param for param-based nodes
   useEffect(() => {
+    if (isSqlParamNode) {
+      setSqlContent((params.query as string) ?? '')
+      setSqlDirty(false)
+      return
+    }
     if (!isSqlNode || !templatePath) {
       setSqlContent('')
       setSqlDirty(false)
@@ -102,14 +112,25 @@ export default function NodeConfigPanel({
       .then((r) => { setSqlContent(r.content); setSqlDirty(false) })
       .catch(() => setSqlContent(''))
       .finally(() => setSqlLoading(false))
-  }, [isSqlNode, templatePath])
+  }, [isSqlNode, isSqlParamNode, templatePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSqlChange(newSql: string) {
     setSqlContent(newSql)
-    setSqlDirty(true)
+    if (isSqlParamNode) {
+      // For param-based SQL nodes, changes update the 'query' param directly
+      setParam('query', newSql)
+    } else {
+      setSqlDirty(true)
+    }
   }
 
   async function handleSaveSql(sql: string) {
+    if (isSqlParamNode) {
+      // For param-based SQL nodes, "save" just applies the value to the param (already done on change)
+      setParam('query', sql)
+      setSqlContent(sql)
+      return
+    }
     if (!templatePath) return
     setSqlSaving(true)
     setSqlSaveError(null)
@@ -262,6 +283,12 @@ export default function NodeConfigPanel({
   const acceptsTemplateParams = resolvedPandasEntry ? false : (nodeTypeSchema?.accepts_template_params ?? false)
   const producesOutput = nodeTypeSchema?.produces_output ?? true
 
+  // For param-based SQL nodes (load_duckdb), hide 'query' from the regular param fields
+  // since it is rendered as a full SQL editor instead.
+  const visibleFixedParams = isSqlParamNode
+    ? fixedParams.filter((p) => p.name !== 'query')
+    : fixedParams
+
   // Extra params not covered by fixed_params (for free key/value editor)
   const knownNames = new Set(fixedParams.map((p) => p.name))
   const extraParams = Object.entries(params).filter(([k]) => !knownNames.has(k))
@@ -291,8 +318,8 @@ export default function NodeConfigPanel({
       )}
 
       <div style={styles.body}>
-        {/* Fixed params */}
-        {fixedParams.map((param) => (
+        {/* Fixed params (query hidden for param-based SQL nodes — shown in editor below) */}
+        {visibleFixedParams.map((param) => (
           <ParamField
             key={param.name}
             param={param}
@@ -323,7 +350,7 @@ export default function NodeConfigPanel({
           </div>
         )}
 
-        {/* SQL editor */}
+        {/* SQL editor — template-based nodes (sql_transform, sql_exec, load_odbc) */}
         {isSqlNode && (
           <div style={styles.sqlSection}>
             <div style={styles.sectionLabel}>
@@ -353,6 +380,27 @@ export default function NodeConfigPanel({
                   : undefined}
               />
             )}
+          </div>
+        )}
+
+        {/* SQL editor — param-based nodes (load_duckdb): SQL stored in 'query' param */}
+        {isSqlParamNode && (
+          <div style={styles.sqlSection}>
+            <div style={styles.sectionLabel}>SQL query</div>
+            <SqlEditor
+              value={sqlContent}
+              onChange={handleSqlChange}
+              onSave={handleSaveSql}
+              dirty={false}
+              saving={false}
+              saveError={null}
+              inputSchemas={inputSchemas}
+              variableNames={variableNames}
+              filename={null}
+              onRunSql={onRunSqlDraft
+                ? (sql) => onRunSqlDraft(nodeId, sql)
+                : undefined}
+            />
           </div>
         )}
 

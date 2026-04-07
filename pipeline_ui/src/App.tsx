@@ -21,6 +21,7 @@ import ContractEdge from './components/ContractEdge'
 import NodeConfigPanel from './components/NodeConfigPanel'
 import WorkspaceBar from './components/WorkspaceBar'
 import LoadPipelineModal from './components/LoadPipelineModal'
+import NewPipelineModal from './components/NewPipelineModal'
 import YamlPreviewPanel from './components/YamlPreviewPanel'
 import VariablesPanel from './components/VariablesPanel'
 import RunHistoryPanel from './components/RunHistoryPanel'
@@ -202,6 +203,7 @@ export default function App() {
     return result
   }, [nodes, pandasCategories])
   const [showLoadModal, setShowLoadModal] = useState(false)
+  const [showNewPipelineModal, setShowNewPipelineModal] = useState(false)
   const [showVariablesPanel, setShowVariablesPanel] = useState(false)
   const [showRunHistory, setShowRunHistory] = useState(false)
   const [showTransformEditor, setShowTransformEditor] = useState(false)
@@ -487,10 +489,14 @@ export default function App() {
   }
 
   async function handleRunSqlDraft(nodeId: string, sqlOverride: string): Promise<NodePreviewResponse> {
-    if (!activeSession?.bundle_path) {
+    // Source nodes (no incoming edges) have no upstream dependencies and can run
+    // stateless against their own external connection — no session required.
+    const hasInputs = edges.some((e) => e.target === nodeId)
+    if (hasInputs && !activeSession?.bundle_path) {
       throw new Error('SQL Run requires an active session with completed upstream nodes. Start a session first (▶ Run), then use Run here.')
     }
-    return previewNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, 200, variablesYaml ?? undefined, workspace || undefined, activeSession.bundle_path, sqlOverride)
+    const bundlePath = hasInputs ? activeSession?.bundle_path : undefined
+    return previewNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, 200, variablesYaml ?? undefined, workspace || undefined, bundlePath, sqlOverride)
   }
 
   async function handleFetchLineage(nodeId: string) {
@@ -585,6 +591,20 @@ export default function App() {
     } catch (e) {
       alert(`Failed to save pipeline: ${e}`)
     }
+  }
+
+  async function handleNewPipeline(name: string) {
+    if (!workspace) throw new Error('No workspace configured.')
+    const filePath = `${workspace}/pipelines/${name}/pipeline.yaml`
+    const initialYaml = yaml.dump({
+      duckdb: { path: 'pipeline.duckdb' },
+      templates: { dir: 'templates' },
+      nodes: [],
+    }, { lineWidth: 120 })
+    await writeWorkspaceFile(filePath, initialYaml)
+    setShowNewPipelineModal(false)
+    // Load the newly created pipeline onto the canvas
+    await handleLoadPipeline(filePath)
   }
 
   function downloadText(filename: string, content: string) {
@@ -888,6 +908,7 @@ export default function App() {
         <WorkspaceBar
           workspace={workspace}
           onWorkspaceChange={handleWorkspaceChange}
+          onNewPipeline={workspace ? () => setShowNewPipelineModal(true) : undefined}
           onLoad={() => setShowLoadModal(true)}
           onSave={savePipeline}
           onSaveToWorkspace={pipelineFilePath ? saveToWorkspace : undefined}
@@ -997,6 +1018,14 @@ export default function App() {
           workspace={workspace}
           onLoad={handleLoadPipeline}
           onClose={() => setShowLoadModal(false)}
+        />
+      )}
+
+      {showNewPipelineModal && workspace && (
+        <NewPipelineModal
+          workspace={workspace}
+          onConfirm={handleNewPipeline}
+          onClose={() => setShowNewPipelineModal(false)}
         />
       )}
 
