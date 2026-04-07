@@ -480,6 +480,14 @@ export default function App() {
     }
   }
 
+  function handleSetTemplate(nodeId: string, templatePath: string, templateFile: string) {
+    setNodes((nds) => nds.map((n) =>
+      n.id === nodeId
+        ? { ...n, data: { ...n.data, template_path: templatePath, template_file: templateFile } }
+        : n
+    ))
+  }
+
   // ---------------------------------------------------------------------------
   // Design-time schema inference
   // ---------------------------------------------------------------------------
@@ -988,6 +996,8 @@ export default function App() {
           onClone={handleCloneNode}
           onClose={() => setSelectedNodeId(null)}
           onTemplateSaved={() => fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})}
+          pipelineDir={pipelineDir ?? undefined}
+          onSetTemplate={handleSetTemplate}
           bottomOffset={activeSession ? 224 : activeRun ? 44 : 0}
         />
       )}

@@ -206,14 +206,16 @@ def _handle_load_duckdb(
 
     if sql_override:
         # Interactive SQL draft — bypass normal table/query validation
-        pass
+        sql = sql_override
+    elif node.template:
+        # SQL saved to a template file takes precedence over inline params
+        sql = _render_template(node, templates_dir)
     elif table and query:
         raise ValueError(f"Node '{node.id}' (load_duckdb): specify 'table' or 'query', not both")
     elif not table and not query:
         raise ValueError(f"Node '{node.id}' (load_duckdb): must specify 'table' or 'query'")
-
-    sql = sql_override if sql_override else (query if query else f'SELECT * FROM "{table}"')
-
+    else:
+        sql = query if query else f'SELECT * FROM "{table}"'
     if path:
         # Attach the external file read-only, query it, then detach.
         import duckdb
