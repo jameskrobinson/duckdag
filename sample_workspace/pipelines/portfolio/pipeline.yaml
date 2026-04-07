@@ -1,0 +1,83 @@
+# Portfolio P&L Pipeline
+#
+# Joins a positions CSV against current prices to compute unrealised P&L
+# for each holding, then enriches with market tier and produces a
+# ranked summary CSV.
+#
+# Depends on: data/prices.csv, data/positions.csv
+
+duckdb:
+  path: session.duckdb
+
+templates:
+  dir: ../../templates
+
+nodes:
+
+  # ── 1. Load prices ──────────────────────────────────────────────────────
+  - id: prices
+    type: load_file
+    inputs: []
+    output: prices
+    description: "Current market prices"
+    params:
+      path: "../../data/prices.csv"
+      format: csv
+
+  # ── 2. Load positions ───────────────────────────────────────────────────
+  - id: positions
+    type: load_file
+    inputs: []
+    output: positions
+    description: "Portfolio holdings: symbol, quantity, cost basis"
+    params:
+      path: "../../data/positions.csv"
+      format: csv
+
+  # ── 3. Add market tier to prices ────────────────────────────────────────
+  - id: prices_tiered
+    type: pandas_transform
+    inputs:
+      - prices
+    output: prices_tiered
+    description: "Enrich prices with market-cap tier before join"
+    params:
+      transform: transforms.enrichment.add_market_tier
+      market_cap_column: market_cap_usd
+
+  # ── 4. Compute P&L ──────────────────────────────────────────────────────
+  - id: pnl
+    type: pandas_transform
+    inputs:
+      - positions
+      - prices_tiered
+    output: pnl
+    description: "Join positions to prices and compute unrealised P&L"
+    params:
+      transform: transforms.enrichment.compute_pnl
+      positions_key: positions
+      prices_key: prices_tiered
+      symbol_col: symbol
+      price_col: price_usd
+      quantity_col: quantity
+      cost_basis_col: cost_basis_usd
+
+  # ── 5. Portfolio summary (SQL) ──────────────────────────────────────────
+  - id: portfolio_summary
+    type: sql_transform
+    inputs:
+      - pnl
+    output: portfolio_summary
+    description: "Ranked P&L summary with classification"
+    template: portfolio_summary.sql
+
+  # ── 6. Export ───────────────────────────────────────────────────────────
+  - id: export_portfolio
+    type: sql_exec
+    inputs:
+      - portfolio_summary
+    description: "Write portfolio summary to CSV"
+    template: export_csv.sql
+    params:
+      source_table: portfolio_summary
+      output_path: "../../output/portfolio_summary.csv"

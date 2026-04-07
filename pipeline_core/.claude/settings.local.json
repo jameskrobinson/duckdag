@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Bash(C:/Users/james/PycharmProjects/PythonProject/.venv/Scripts/uv.exe run:*)",
+      "Bash(C:/Users/james/PycharmProjects/PythonProject/.venv/Scripts/uv.exe sync:*)"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+node_type: pandas_transform
+label: test_classify_change
+description: Add direction / magnitude / change_class columns
+params:
+  transform: transforms.enrichment.classify_change
+  column: change_24h_pct
+  strong_threshold: ${variables.significant_move_pct}
+  moderate_threshold: 2
+  flat_threshold: 0.1

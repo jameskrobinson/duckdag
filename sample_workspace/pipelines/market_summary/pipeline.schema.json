@@ -1,0 +1,50 @@
+{
+  "with_change_class": {
+    "columns": [
+      {
+        "name": "id",
+        "dtype": "str"
+      },
+      {
+        "name": "name",
+        "dtype": "str"
+      },
+      {
+        "name": "symbol",
+        "dtype": "str"
+      },
+      {
+        "name": "price_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap_usd",
+        "dtype": "int64"
+      },
+      {
+        "name": "change_24h_pct",
+        "dtype": "float64"
+      },
+      {
+        "name": "volume_24h_usd",
+        "dtype": "int64"
+      },
+      {
+        "name": "sector",
+        "dtype": "str"
+      },
+      {
+        "name": "direction",
+        "dtype": "str"
+      },
+      {
+        "name": "magnitude",
+        "dtype": "str"
+      },
+      {
+        "name": "change_class",
+        "dtype": "str"
+      }
+    ]
+  }
+}

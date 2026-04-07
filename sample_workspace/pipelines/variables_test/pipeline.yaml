@@ -1,0 +1,88 @@
+# Variables Test Pipeline
+#
+# Exercises variable declarations, Jinja2 template rendering, and the
+# validation banner's variable-warning feature.
+#
+# How to trigger a variable warning:
+#   Load this pipeline without setting the workspace variables.yaml, or
+#   reference {{ undefined_var }} in a SQL template to see the amber warning.
+#
+# Variable declarations are surfaced in the UI as typed parameter fields
+# with defaults, descriptions, and a required flag.
+
+duckdb:
+  path: session.duckdb
+
+templates:
+  dir: ../../templates
+
+variable_declarations:
+  - name: significant_move_pct
+    type: number
+    default: 5.0
+    description: "Absolute % change above which a move is classified as 'strong'"
+    required: false
+  - name: large_cap_threshold
+    type: number
+    default: 50000000000
+    description: "USD market cap threshold for large-cap classification"
+    required: false
+  - name: mid_cap_threshold
+    type: number
+    default: 5000000000
+    description: "USD market cap threshold for mid-cap classification"
+    required: false
+  - name: top_n
+    type: integer
+    default: 10
+    description: "Number of top movers to return"
+    required: false
+
+nodes:
+
+  # ── 1. Load prices ──────────────────────────────────────────────────────
+  - id: raw_prices
+    type: load_file
+    inputs: []
+    output: raw_prices
+    description: "Load prices CSV"
+    params:
+      path: "../../data/prices.csv"
+
+  # ── 2. Classify (uses variables via ${variables.X}) ─────────────────────
+  - id: with_change_class
+    type: pandas_transform
+    inputs:
+      - raw_prices
+    output: with_change_class
+    description: "Classify price change — params reference variables"
+    params:
+      transform: transforms.enrichment.classify_change
+      column: change_24h_pct
+      strong_threshold: ${variables.significant_move_pct}
+      moderate_threshold: 2.0
+      flat_threshold: 0.1
+
+  # ── 3. Add market tier ──────────────────────────────────────────────────
+  - id: enriched
+    type: pandas_transform
+    inputs:
+      - with_change_class
+    output: enriched
+    description: "Add market_tier — params reference variables"
+    params:
+      transform: transforms.enrichment.add_market_tier
+      market_cap_column: market_cap_usd
+      large_cap: ${variables.large_cap_threshold}
+      mid_cap: ${variables.mid_cap_threshold}
+
+  # ── 4. Top movers — SQL template uses {{ top_n }} variable ──────────────
+  - id: top_movers
+    type: sql_transform
+    inputs:
+      - enriched
+    output: top_movers
+    description: "Top movers — SQL template uses {{ top_n }} from variables"
+    template: top_movers.sql
+    params:
+      limit: ${variables.top_n}

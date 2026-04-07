@@ -1,0 +1,166 @@
+{
+  "load_prices": {
+    "columns": [
+      {
+        "name": "id",
+        "dtype": "str"
+      },
+      {
+        "name": "symbol",
+        "dtype": "str"
+      },
+      {
+        "name": "name",
+        "dtype": "str"
+      },
+      {
+        "name": "image",
+        "dtype": "str"
+      },
+      {
+        "name": "current_price",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap",
+        "dtype": "int64"
+      },
+      {
+        "name": "market_cap_rank",
+        "dtype": "int64"
+      },
+      {
+        "name": "fully_diluted_valuation",
+        "dtype": "int64"
+      },
+      {
+        "name": "total_volume",
+        "dtype": "int64"
+      },
+      {
+        "name": "high_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "low_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "price_change_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "price_change_percentage_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap_change_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap_change_percentage_24h",
+        "dtype": "float64"
+      },
+      {
+        "name": "circulating_supply",
+        "dtype": "float64"
+      },
+      {
+        "name": "total_supply",
+        "dtype": "float64"
+      },
+      {
+        "name": "max_supply",
+        "dtype": "float64"
+      },
+      {
+        "name": "ath",
+        "dtype": "float64"
+      },
+      {
+        "name": "ath_change_percentage",
+        "dtype": "float64"
+      },
+      {
+        "name": "ath_date",
+        "dtype": "str"
+      },
+      {
+        "name": "atl",
+        "dtype": "float64"
+      },
+      {
+        "name": "atl_change_percentage",
+        "dtype": "float64"
+      },
+      {
+        "name": "atl_date",
+        "dtype": "str"
+      },
+      {
+        "name": "roi",
+        "dtype": "object"
+      },
+      {
+        "name": "last_updated",
+        "dtype": "str"
+      }
+    ]
+  },
+  "clean_cols": {
+    "columns": [
+      {
+        "name": "name",
+        "dtype": "str"
+      },
+      {
+        "name": "symbol",
+        "dtype": "str"
+      },
+      {
+        "name": "rank",
+        "dtype": "int64"
+      },
+      {
+        "name": "price_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap_usd",
+        "dtype": "int64"
+      },
+      {
+        "name": "change_24h_pct",
+        "dtype": "float64"
+      }
+    ]
+  },
+  "sorted_movers": {
+    "columns": [
+      {
+        "name": "rank",
+        "dtype": "int32"
+      },
+      {
+        "name": "name",
+        "dtype": "str"
+      },
+      {
+        "name": "symbol",
+        "dtype": "str"
+      },
+      {
+        "name": "price_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "market_cap_usd",
+        "dtype": "int64"
+      },
+      {
+        "name": "change_24h_pct",
+        "dtype": "float64"
+      }
+    ]
+  }
+}

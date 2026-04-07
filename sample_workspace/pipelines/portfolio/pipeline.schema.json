@@ -1,0 +1,50 @@
+{
+  "portfolio_summary": {
+    "columns": [
+      {
+        "name": "symbol",
+        "dtype": "str"
+      },
+      {
+        "name": "quantity",
+        "dtype": "float64"
+      },
+      {
+        "name": "cost_basis_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "current_price_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "total_cost_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "current_value_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "pnl_usd",
+        "dtype": "float64"
+      },
+      {
+        "name": "pnl_pct",
+        "dtype": "float64"
+      },
+      {
+        "name": "pnl_class",
+        "dtype": "str"
+      },
+      {
+        "name": "sector",
+        "dtype": "str"
+      },
+      {
+        "name": "market_tier",
+        "dtype": "str"
+      }
+    ]
+  }
+}
