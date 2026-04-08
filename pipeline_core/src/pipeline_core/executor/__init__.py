@@ -505,9 +505,113 @@ def _handle_push_odbc(
     store: IntermediateStore,
     templates_dir: Path | None,
 ) -> None:
-    raise NotImplementedError(
-        f"Node '{node.id}' (push_odbc): not yet implemented in pipeline_core"
-    )
+    """Write a DataFrame to a table via an ODBC connection.
+
+    Connection resolution order (same as load_odbc):
+    1. ``connection_string`` param — used as-is.
+    2. ``odbc_key`` param — looks up a named connection in ``spec.odbc``.
+    3. Inline params — ``driver``, ``server``, ``database``, ``uid``, ``pwd``,
+       ``trusted``, ``dsn``.
+
+    Params:
+        table: Destination table name (required).
+        mode: 'replace' (default) drops and recreates the table; 'append' inserts rows.
+        schema: Database schema name (e.g. 'dbo').  Omit for the connection default.
+    """
+    try:
+        import pyodbc  # type: ignore[import-untyped]
+    except ImportError:
+        raise ImportError(
+            "pyodbc is required for push_odbc nodes. Install it with: pip install pyodbc"
+        ) from None
+
+    if not node.inputs:
+        raise ValueError(f"Node '{node.id}' (push_odbc): must have at least one input")
+
+    table: str = node.params.get("table", "")
+    if not table:
+        raise ValueError(f"Node '{node.id}' (push_odbc): 'table' param is required")
+
+    mode: str = str(node.params.get("mode", "replace")).lower()
+    if mode not in ("replace", "append"):
+        raise ValueError(f"Node '{node.id}' (push_odbc): 'mode' must be 'replace' or 'append'")
+
+    schema: str | None = node.params.get("schema") or None
+    qualified = f'[{schema}].[{table}]' if schema else f'[{table}]'
+
+    # --- Resolve connection string (same logic as load_odbc) ---
+    conn_str: str | None = node.params.get("connection_string") or None
+
+    if conn_str is None:
+        odbc_key: str = node.params.get("odbc_key", "")
+        if odbc_key:
+            if odbc_key not in spec.odbc:
+                raise KeyError(
+                    f"Node '{node.id}': ODBC key '{odbc_key}' not found in spec.odbc. "
+                    f"Available keys: {list(spec.odbc)}"
+                )
+            conn_str = _build_odbc_conn_str(spec.odbc[odbc_key])
+        else:
+            _INLINE_CONN_KEYS = {"driver", "server", "database", "uid", "pwd", "trusted", "dsn"}
+            if not any(node.params.get(k) for k in _INLINE_CONN_KEYS):
+                raise ValueError(
+                    f"Node '{node.id}' (push_odbc): no connection configured. "
+                    "Provide 'connection_string', 'odbc_key', or inline params "
+                    "(driver, server, database, uid, pwd, trusted, dsn)."
+                )
+            from pipeline_core.resolver.models import ODBCConnectionConfig
+            cfg = ODBCConnectionConfig(
+                dsn=node.params.get("dsn") or None,
+                driver=node.params.get("driver") or None,
+                server=node.params.get("server") or None,
+                database=node.params.get("database") or None,
+                uid=node.params.get("uid") or None,
+                pwd=node.params.get("pwd") or None,
+                trusted=node.params.get("trusted"),
+            )
+            conn_str = _build_odbc_conn_str(cfg)
+
+    df = store.get(node.inputs[0])
+
+    with pyodbc.connect(conn_str) as odbc_conn:
+        cursor = odbc_conn.cursor()
+
+        if mode == "replace":
+            # Drop existing table and recreate from DataFrame column types
+            cursor.execute(f"IF OBJECT_ID(N'{qualified}', N'U') IS NOT NULL DROP TABLE {qualified}")
+
+            def _py_to_sql_type(dtype: str) -> str:
+                if "int" in dtype:
+                    return "BIGINT"
+                if "float" in dtype or "double" in dtype:
+                    return "FLOAT"
+                if "bool" in dtype:
+                    return "BIT"
+                if "datetime" in dtype or "timestamp" in dtype:
+                    return "DATETIME2"
+                if "date" in dtype:
+                    return "DATE"
+                return "NVARCHAR(MAX)"
+
+            col_defs = ", ".join(
+                f"[{col}] {_py_to_sql_type(str(df[col].dtype))}"
+                for col in df.columns
+            )
+            cursor.execute(f"CREATE TABLE {qualified} ({col_defs})")
+
+        # Insert rows in batches
+        if len(df) > 0:
+            placeholders = ", ".join("?" * len(df.columns))
+            insert_sql = f"INSERT INTO {qualified} VALUES ({placeholders})"
+            # Convert to list of tuples, replacing NaN/NaT with None
+            rows = [
+                tuple(None if (v != v) else v for v in row)  # NaN check via v != v
+                for row in df.itertuples(index=False, name=None)
+            ]
+            cursor.fast_executemany = True
+            cursor.executemany(insert_sql, rows)
+
+        odbc_conn.commit()
 
 
 def _handle_export_dta(

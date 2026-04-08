@@ -122,6 +122,13 @@ export interface BuilderNodeData extends Record<string, unknown> {
   var_error?: boolean
   /** DQ process hooks — post-execution assertions on this node's output */
   dq_checks?: DQCheck[]
+  /** Per-node chart config — overrides the pipeline's default_chart when set */
+  chart_config?: {
+    x_column?: string
+    value_columns?: string[]
+    group_by_column?: string
+    chart_type?: 'line' | 'bar' | 'scatter' | 'pie'
+  }
 }
 
 /** Full pipeline schema file format (node_id → NodeOutputSchema) */
@@ -213,6 +220,7 @@ export interface WorkspacePipelineFile {
   name: string
   relative_path: string
   full_path: string
+  last_modified?: string
 }
 
 export interface WorkspaceTransformFile {
@@ -242,4 +250,6 @@ export interface NodeTemplate {
   template_path?: string
   /** First ~400 chars of SQL for palette tooltip / config panel display */
   sql_preview?: string
+  /** User-defined tags for cross-type browsing and search */
+  tags?: string[]
 }

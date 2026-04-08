@@ -248,23 +248,93 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
     NodeTypeSchema(
         type="push_odbc",
         label="Push to ODBC",
-        description="Write a DataFrame to a table in a named ODBC target. Not yet implemented.",
+        description=(
+            "Write a DataFrame to a table in an ODBC target. "
+            "Specify connection details inline or via a named odbc_key. "
+            "Use ${env.xxx} references for sensitive values such as passwords."
+        ),
         category="export",
         needs_template=False,
         produces_output=False,
         reads_store_inputs=True,
         fixed_params=[
             ParamSchema(
-                name="odbc_key",
-                type="string",
-                required=True,
-                description="Key into the pipeline's odbc: config block identifying the target.",
-            ),
-            ParamSchema(
                 name="table",
                 type="string",
                 required=True,
                 description="Destination table name.",
+            ),
+            ParamSchema(
+                name="mode",
+                type="string",
+                required=False,
+                description="Write mode: 'replace' (default, drops and recreates) or 'append'.",
+            ),
+            ParamSchema(
+                name="schema",
+                type="string",
+                required=False,
+                description="Database schema name (e.g. 'dbo'). Omit to use the connection's default schema.",
+            ),
+            ParamSchema(
+                name="odbc_key",
+                type="string",
+                required=False,
+                description=(
+                    "Named connection from the pipeline's odbc: config block. "
+                    "If set, all inline connection params below are ignored."
+                ),
+            ),
+            ParamSchema(
+                name="connection_string",
+                type="string",
+                required=False,
+                description=(
+                    "Full ODBC connection string. "
+                    "If set, takes precedence over all other connection params."
+                ),
+            ),
+            ParamSchema(
+                name="driver",
+                type="string",
+                required=False,
+                description="ODBC driver name, e.g. 'ODBC Driver 17 for SQL Server'.",
+            ),
+            ParamSchema(
+                name="server",
+                type="string",
+                required=False,
+                description="Server hostname or IP address.",
+            ),
+            ParamSchema(
+                name="database",
+                type="string",
+                required=False,
+                description="Database name.",
+            ),
+            ParamSchema(
+                name="trusted",
+                type="boolean",
+                required=False,
+                description="Use Windows trusted authentication.",
+            ),
+            ParamSchema(
+                name="uid",
+                type="string",
+                required=False,
+                description="Username.",
+            ),
+            ParamSchema(
+                name="pwd",
+                type="password",
+                required=False,
+                description="Password. Use ${env.xxx} to avoid storing credentials in pipeline.yaml.",
+            ),
+            ParamSchema(
+                name="dsn",
+                type="string",
+                required=False,
+                description="Data Source Name (DSN).",
             ),
         ],
         accepts_template_params=False,

@@ -277,6 +277,22 @@ export function writeWorkspaceFile(
   })
 }
 
+export function deleteWorkspaceFile(path: string): Promise<{ status: string; path: string }> {
+  return request(`/workspace/file?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+}
+
+/** Returns true if the file exists (resolves), false if 404, throws on other errors. */
+export async function workspaceFileExists(path: string): Promise<boolean> {
+  try {
+    await fetchWorkspaceFile(path)
+    return true
+  } catch (e: unknown) {
+    if (e instanceof Error && e.message.includes('404')) return false
+    if (typeof e === 'string' && e.includes('404')) return false
+    throw e
+  }
+}
+
 export function listWorkspaceTransforms(workspace: string): Promise<import('../types').WorkspaceTransformFile[]> {
   return request(`/workspace/transforms?workspace=${encodeURIComponent(workspace)}`)
 }

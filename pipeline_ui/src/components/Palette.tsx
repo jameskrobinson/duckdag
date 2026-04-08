@@ -14,11 +14,13 @@ interface PaletteProps {
   nodeTypes: NodeTypeSchema[]
   pandasCategories: PandasTransformCategory[]
   templates: NodeTemplate[]
+  onEditTemplate?: (template: NodeTemplate) => void
+  onDeleteTemplate?: (template: NodeTemplate) => void
 }
 
 /** Drag-and-drop palette of available node types, with a top-level Common Library
  * section and collapsible Local/Pipeline template sub-trees per node type. */
-export default function Palette({ nodeTypes, pandasCategories, templates }: PaletteProps) {
+export default function Palette({ nodeTypes, pandasCategories, templates, onEditTemplate, onDeleteTemplate }: PaletteProps) {
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState('')
 
@@ -35,7 +37,10 @@ export default function Palette({ nodeTypes, pandasCategories, templates }: Pale
   }
   function matchesTemplate(t: NodeTemplate) {
     if (!q) return true
-    return t.label.toLowerCase().includes(q) || t.node_type.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)
+    return t.label.toLowerCase().includes(q)
+      || t.node_type.toLowerCase().includes(q)
+      || t.description.toLowerCase().includes(q)
+      || (t.tags ?? []).some((tag) => tag.toLowerCase().includes(q))
   }
 
   // Non-pandas node types only — pandas_transform is replaced by the tree below
@@ -220,6 +225,8 @@ export default function Palette({ nodeTypes, pandasCategories, templates }: Pale
                           onToggle={toggle}
                           onDragStart={onDragStartTemplate}
                           forceExpand={forceExpand}
+                          onEdit={onEditTemplate}
+                          onDelete={onDeleteTemplate}
                         />
                       )}
                       {tExpanded && (
@@ -232,6 +239,8 @@ export default function Palette({ nodeTypes, pandasCategories, templates }: Pale
                           onToggle={toggle}
                           onDragStart={onDragStartTemplate}
                           forceExpand={forceExpand}
+                          onEdit={onEditTemplate}
+                          onDelete={onDeleteTemplate}
                         />
                       )}
                       {tExpanded && (
@@ -335,6 +344,8 @@ export default function Palette({ nodeTypes, pandasCategories, templates }: Pale
                           onDragStart={onDragStartTemplate}
                           indent={34}
                           forceExpand={forceExpand}
+                          onEdit={onEditTemplate}
+                          onDelete={onDeleteTemplate}
                         />
                       )}
                       {ptExpanded && (
@@ -375,6 +386,8 @@ function TemplateScope({
   forceExpand,
   onToggle,
   onDragStart,
+  onEdit,
+  onDelete,
   indent = 22,
 }: {
   label: string
@@ -385,10 +398,15 @@ function TemplateScope({
   forceExpand: boolean
   onToggle: (key: string) => void
   onDragStart: (e: React.DragEvent, t: NodeTemplate, nt: NodeTypeSchema | undefined) => void
+  onEdit?: (t: NodeTemplate) => void
+  onDelete?: (t: NodeTemplate) => void
   indent?: number
 }) {
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   if (items.length === 0) return null
   const isExpanded = forceExpand || expanded.has(scopeKey)
+  // Edit/delete only available for user-created templates (local/config scope)
+  const canManage = (t: NodeTemplate) => (t.scope === 'local' || t.scope === 'config') && (onEdit || onDelete)
   return (
     <div>
       <div
@@ -402,10 +420,12 @@ function TemplateScope({
       {isExpanded && items.map((tmpl) => (
         <div
           key={tmpl.id}
-          draggable
+          draggable={hoveredId !== tmpl.id + '_btn'}
           onDragStart={(e) => onDragStart(e, tmpl, nodeType)}
+          onMouseEnter={() => setHoveredId(tmpl.id)}
+          onMouseLeave={() => setHoveredId(null)}
           title={tmpl.sql_preview ? `${tmpl.description}\n\n${tmpl.sql_preview}` : tmpl.description}
-          style={{ ...styles.templateLeaf, paddingLeft: indent + 20 }}
+          style={{ ...styles.templateLeaf, paddingLeft: indent + 20, position: 'relative' }}
         >
           <span style={
             tmpl.scope === 'pipeline' ? styles.templateLeafLabelPipeline
@@ -415,8 +435,40 @@ function TemplateScope({
           {tmpl.description && (
             <span style={styles.templateLeafHint}>{tmpl.description}</span>
           )}
+          {tmpl.tags && tmpl.tags.length > 0 && (
+            <div style={styles.tagRow}>
+              {tmpl.tags.map((tag) => (
+                <span key={tag} style={styles.tag}>{tag}</span>
+              ))}
+            </div>
+          )}
           {tmpl.template_file && (
             <span style={styles.templateFile}>{tmpl.template_file}</span>
+          )}
+          {canManage(tmpl) && hoveredId === tmpl.id && (
+            <span
+              id={tmpl.id + '_btn'}
+              style={styles.templateActions}
+              onMouseEnter={() => setHoveredId(tmpl.id + '_btn')}
+              onMouseLeave={() => setHoveredId(tmpl.id)}
+            >
+              {onEdit && (
+                <button
+                  style={styles.templateActionBtn}
+                  title="Edit template"
+                  onClick={(e) => { e.stopPropagation(); onEdit(tmpl) }}
+                  draggable={false}
+                >✎</button>
+              )}
+              {onDelete && (
+                <button
+                  style={{ ...styles.templateActionBtn, color: '#f38ba8' }}
+                  title="Delete template"
+                  onClick={(e) => { e.stopPropagation(); onDelete(tmpl) }}
+                  draggable={false}
+                >✕</button>
+              )}
+            </span>
           )}
         </div>
       ))}
@@ -613,6 +665,37 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#89b4fa',
     fontFamily: 'monospace',
     marginTop: 1,
+  },
+  tagRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 3,
+    marginTop: 3,
+  },
+  tag: {
+    fontSize: 9,
+    color: '#cba6f7',
+    background: '#cba6f718',
+    border: '1px solid #cba6f733',
+    borderRadius: 3,
+    padding: '1px 5px',
+  },
+  templateActions: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    display: 'flex',
+    gap: 2,
+  },
+  templateActionBtn: {
+    background: '#313244',
+    border: '1px solid #45475a',
+    color: '#cdd6f4',
+    borderRadius: 3,
+    padding: '1px 5px',
+    cursor: 'pointer',
+    fontSize: 10,
+    lineHeight: 1.4,
   },
   // ── Pandas sub-tree ───────────────────────────────────────────────────────
   moduleHeader: {

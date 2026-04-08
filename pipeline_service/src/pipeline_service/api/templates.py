@@ -41,6 +41,8 @@ class NodeTemplate(BaseModel):
     """Absolute path to the template file (set for local templates)."""
     sql_preview: str | None = None
     """First ~300 chars of SQL for display in the palette tooltip."""
+    tags: list[str] = []
+    """User-defined tags for cross-type browsing and palette search (e.g. ['finance', 'daily'])."""
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +296,8 @@ def _local_from_yaml_files(node_templates_dir: Path, id_prefix: str = "local/yam
         # Build a stable id from the relative path within the templates dir
         rel = yaml_file.relative_to(node_templates_dir)
         template_id = f"{id_prefix}/{rel.with_suffix('').as_posix().replace('/', '_')}"
+        raw_tags = raw.get("tags", [])
+        tags = [str(t) for t in raw_tags] if isinstance(raw_tags, list) else []
         results.append(NodeTemplate(
             id=template_id,
             node_type=raw["node_type"],
@@ -305,6 +309,7 @@ def _local_from_yaml_files(node_templates_dir: Path, id_prefix: str = "local/yam
             template_path=str(
                 node_templates_dir / raw["template_file"]
             ) if raw.get("template_file") else None,
+            tags=tags,
         ))
     return results
 

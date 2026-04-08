@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,8 @@ class WorkspacePipelineFile(BaseModel):
     name: str
     relative_path: str
     full_path: str
+    last_modified: str | None = None
+    """ISO-8601 UTC timestamp of the file's last modification time."""
 
 
 class WorkspaceInfo(BaseModel):
@@ -62,7 +65,7 @@ def list_workspace_pipelines(
         raise HTTPException(status_code=400, detail=f"Not a directory: {workspace}")
 
     results: list[WorkspacePipelineFile] = []
-    for f in sorted(root.rglob("*")):
+    for f in root.rglob("*"):
         if not f.is_file():
             continue
         if f.suffix not in _PIPELINE_EXTS:
@@ -86,12 +89,16 @@ def list_workspace_pipelines(
             display_name = rel_parts[1]  # e.g. "crypto_dashboard"
         else:
             display_name = f.stem
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()
         results.append(WorkspacePipelineFile(
             name=display_name,
             relative_path=str(f.relative_to(root)),
             full_path=str(f),
+            last_modified=mtime,
         ))
 
+    # Sort most-recently-modified first
+    results.sort(key=lambda r: r.last_modified or "", reverse=True)
     return results
 
 
@@ -220,6 +227,25 @@ def write_workspace_file(body: FileWriteRequest) -> dict[str, str]:
     p = Path(body.path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body.content, encoding="utf-8")
+    return {"status": "ok", "path": str(p)}
+
+
+@router.delete("/file")
+def delete_workspace_file(
+    path: str = Query(..., description="Absolute path of the file to delete"),
+) -> dict[str, str]:
+    """Delete a file from the workspace.
+
+    Used by the builder to remove node template YAML files (and their bundled
+    SQL companions) from ``{workspace}/node_templates/``.
+    Returns 404 if the file does not exist.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not p.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
+    p.unlink()
     return {"status": "ok", "path": str(p)}
 
 

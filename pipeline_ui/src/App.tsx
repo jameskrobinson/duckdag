@@ -15,6 +15,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/base.css'
 
+import type { ChartConfig } from './components/ChartView'
 import Palette from './components/Palette'
 import PipelineNode from './components/PipelineNode'
 import ContractEdge from './components/ContractEdge'
@@ -29,9 +30,10 @@ import RunVariablesModal from './components/RunVariablesModal'
 import RunPanel from './components/RunPanel'
 import SessionPanel from './components/SessionPanel'
 import TransformEditorPanel from './components/TransformEditorPanel'
+import TemplateEditModal from './components/TemplateEditModal'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
-import { createRun, createSession, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchTemplates, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
+import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchTemplates, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
 import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, VariableDeclaration } from './types'
 
 const nodeTypes: NodeTypes = {
@@ -215,6 +217,8 @@ export default function App() {
   const [variablesYaml, setVariablesYaml] = useState<string | null>(null)
   /** Variable declarations from the loaded pipeline.yaml (variable_declarations block) */
   const [variableDeclarations, setVariableDeclarations] = useState<VariableDeclaration[]>([])
+  /** Pipeline-level default chart config — read from default_chart: in pipeline.yaml */
+  const [defaultChartConfig, setDefaultChartConfig] = useState<ChartConfig | undefined>(undefined)
 
   // Templates — fetched whenever workspace changes
   const [remoteTemplates, setRemoteTemplates] = useState<NodeTemplate[]>([])
@@ -386,10 +390,14 @@ export default function App() {
       const templatesRelDir = (parsed?.templates as Record<string, unknown>)?.dir as string ?? 'templates'
       const templatesDir = `${pipelineDir}/${templatesRelDir}`.replace(/\\/g, '/')
 
+      // Read pipeline-level default_chart
+      setDefaultChartConfig((parsed?.default_chart as ChartConfig) ?? undefined)
+
       const paramsByNodeId: Record<string, Record<string, unknown>> = {}
       const templatePathByNodeId: Record<string, string> = {}
       const templateFileByNodeId: Record<string, string> = {}
       const dqChecksByNodeId: Record<string, import('./types').DQCheck[]> = {}
+      const chartConfigByNodeId: Record<string, ChartConfig> = {}
       for (const rn of rawNodes) {
         const id = rn.id as string
         paramsByNodeId[id] = (rn.params as Record<string, unknown>) ?? {}
@@ -399,6 +407,9 @@ export default function App() {
         }
         if (Array.isArray(rn.dq_checks) && rn.dq_checks.length > 0) {
           dqChecksByNodeId[id] = rn.dq_checks as import('./types').DQCheck[]
+        }
+        if (rn.chart) {
+          chartConfigByNodeId[id] = rn.chart as ChartConfig
         }
       }
 
@@ -421,6 +432,7 @@ export default function App() {
           template_file: templateFileByNodeId[sn.id],
           template_path: templatePathByNodeId[sn.id],
           dq_checks: dqChecksByNodeId[sn.id],
+          chart_config: chartConfigByNodeId[sn.id],
         },
       }))
 
@@ -521,6 +533,60 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------------------
+  // Chart config save handlers
+  // ---------------------------------------------------------------------------
+
+  async function handleSaveChartForNode(nodeId: string, config: ChartConfig) {
+    const updatedNodes = nodes.map((n) =>
+      n.id === nodeId ? { ...n, data: { ...n.data, chart_config: config } } : n
+    )
+    setNodes(updatedNodes)
+    if (!pipelineFilePath) return
+    const pipelineObj = buildPipelineObject(updatedNodes, edges, defaultChartConfig)
+    await writeWorkspaceFile(pipelineFilePath, yaml.dump(pipelineObj, { lineWidth: 120 })).catch((e) => alert(`Failed to save: ${e}`))
+  }
+
+  async function handleSaveChartAsDefault(config: ChartConfig) {
+    setDefaultChartConfig(config)
+    if (!pipelineFilePath) return
+    const pipelineObj = buildPipelineObject(nodes, edges, config)
+    await writeWorkspaceFile(pipelineFilePath, yaml.dump(pipelineObj, { lineWidth: 120 })).catch((e) => alert(`Failed to save: ${e}`))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Template edit / delete
+  // ---------------------------------------------------------------------------
+
+  const [editingTemplate, setEditingTemplate] = useState<{ path: string; content: string } | null>(null)
+
+  async function handleEditTemplate(tmpl: NodeTemplate) {
+    if (!tmpl.template_path) return
+    try {
+      const { content } = await fetchWorkspaceFile(tmpl.template_path)
+      setEditingTemplate({ path: tmpl.template_path, content })
+    } catch (e) {
+      alert(`Could not load template: ${e}`)
+    }
+  }
+
+  async function handleDeleteTemplate(tmpl: NodeTemplate) {
+    if (!tmpl.template_path) return
+    if (!window.confirm(`Delete template "${tmpl.label}"?\n\n${tmpl.template_path}`)) return
+    try {
+      await deleteWorkspaceFile(tmpl.template_path)
+      // Also delete bundled SQL file if present
+      if (tmpl.template_file) {
+        const sqlFile = tmpl.template_file.replace(/\.yaml$/, '.sql.j2')
+        const sqlPath = tmpl.template_path.replace(/[^/\\]+$/, sqlFile)
+        await deleteWorkspaceFile(sqlPath).catch(() => {}) // best-effort
+      }
+      fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})
+    } catch (e) {
+      alert(`Failed to delete template: ${e}`)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Design-time schema inference
   // ---------------------------------------------------------------------------
 
@@ -610,7 +676,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   function savePipeline() {
-    const pipelineObj = buildPipelineObject(nodes, edges)
+    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig)
     downloadText('pipeline.yaml', yaml.dump(pipelineObj, { lineWidth: 120 }))
 
     const schema: Record<string, unknown> = {}
@@ -624,7 +690,7 @@ export default function App() {
 
   async function saveToWorkspace() {
     if (!pipelineFilePath) return
-    const pipelineObj = buildPipelineObject(nodes, edges)
+    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig)
     const yamlText = yaml.dump(pipelineObj, { lineWidth: 120 })
     try {
       await writeWorkspaceFile(pipelineFilePath, yamlText)
@@ -893,8 +959,8 @@ export default function App() {
 
   const previewYaml = useMemo(() => {
     if (!yamlPreviewOpen) return ''
-    return yaml.dump(buildPipelineObject(nodes, edges), { lineWidth: 120 })
-  }, [yamlPreviewOpen, nodes, edges])
+    return yaml.dump(buildPipelineObject(nodes, edges, defaultChartConfig), { lineWidth: 120 })
+  }, [yamlPreviewOpen, nodes, edges, defaultChartConfig])
 
   // ---------------------------------------------------------------------------
   // Validation (debounced, runs on every canvas change)
@@ -942,7 +1008,13 @@ export default function App() {
 
   return (
     <div style={styles.root}>
-      <Palette nodeTypes={paletteTypes} pandasCategories={pandasCategories} templates={templates} />
+      <Palette
+        nodeTypes={paletteTypes}
+        pandasCategories={pandasCategories}
+        templates={templates}
+        onEditTemplate={handleEditTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+      />
 
       <div style={styles.canvasWrapper}>
         <WorkspaceBar
@@ -1030,6 +1102,9 @@ export default function App() {
           onTemplateSaved={() => fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})}
           pipelineDir={pipelineDir ?? undefined}
           onSetTemplate={handleSetTemplate}
+          chartConfig={selectedNode.data.chart_config as ChartConfig | undefined ?? defaultChartConfig}
+          onSaveChartForNode={pipelineFilePath ? handleSaveChartForNode : undefined}
+          onSaveChartAsDefault={pipelineFilePath ? handleSaveChartAsDefault : undefined}
           bottomOffset={activeSession ? 224 : activeRun ? 44 : 0}
         />
       )}
@@ -1103,6 +1178,19 @@ export default function App() {
         />
       )}
 
+      {editingTemplate && (
+        <TemplateEditModal
+          path={editingTemplate.path}
+          initialContent={editingTemplate.content}
+          onSave={async (content) => {
+            await writeWorkspaceFile(editingTemplate.path, content)
+            setEditingTemplate(null)
+            fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})
+          }}
+          onClose={() => setEditingTemplate(null)}
+        />
+      )}
+
       {contextMenu && (
         <div
           style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
@@ -1155,7 +1243,7 @@ export default function App() {
 // Pipeline serialisation helpers
 // ---------------------------------------------------------------------------
 
-function buildPipelineObject(nodes: Node<BuilderNodeData>[], edges: Edge[]) {
+function buildPipelineObject(nodes: Node<BuilderNodeData>[], edges: Edge[], defaultChartConfig?: ChartConfig) {
   const inputMap: Record<string, string[]> = {}
   for (const edge of edges) {
     if (!inputMap[edge.target]) inputMap[edge.target] = []
@@ -1173,12 +1261,14 @@ function buildPipelineObject(nodes: Node<BuilderNodeData>[], edges: Edge[]) {
     if (n.data.description) spec.description = n.data.description
     if (n.data.dq_checks && (n.data.dq_checks as unknown[]).length > 0)
       spec.dq_checks = n.data.dq_checks
+    if (n.data.chart_config) spec.chart = n.data.chart_config
     return spec
   })
   // Include templates section whenever at least one node uses a template file
   const hasTemplates = nodes.some((n) => n.data.template_file)
   const templatesSection = hasTemplates ? { templates: { dir: 'templates' } } : {}
-  return { duckdb: { path: 'pipeline.duckdb' }, ...templatesSection, nodes: nodeSpecs }
+  const defaultChartSection = defaultChartConfig ? { default_chart: defaultChartConfig } : {}
+  return { duckdb: { path: 'pipeline.duckdb' }, ...defaultChartSection, ...templatesSection, nodes: nodeSpecs }
 }
 
 /** JSON-encoded pipeline for service calls (JSON is valid YAML for the service). */

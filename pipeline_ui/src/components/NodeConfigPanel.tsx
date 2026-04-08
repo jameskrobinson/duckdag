@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { BuilderNodeData, ColumnSchema, DQCheck, DQCheckType, LineageRow, NodePreviewResponse, NodeTypeSchema, PandasTransformEntry, ParamSchema } from '../types'
-import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, writeWorkspaceFile } from '../api/client'
+import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, workspaceFileExists, writeWorkspaceFile } from '../api/client'
 import * as yaml from 'js-yaml'
 import SqlEditor from './SqlEditor'
 import NodeOutputPreview from './NodeOutputPreview'
+import type { ChartConfig } from './ChartView'
 
 /** Context so ParamField can access variable names without prop drilling */
 const VariableNamesContext = createContext<string[]>([])
@@ -43,6 +44,12 @@ interface NodeConfigPanelProps {
   pipelineDir?: string
   /** Called after a new SQL template file is created for this node, so the canvas can update template_path/template_file. */
   onSetTemplate?: (nodeId: string, templatePath: string, templateFile: string) => void
+  /** Chart config to show in the preview modal (node-level override or pipeline default). */
+  chartConfig?: ChartConfig
+  /** Called when the user saves chart config for this specific node. */
+  onSaveChartForNode?: (nodeId: string, config: ChartConfig) => void
+  /** Called when the user saves chart config as the pipeline default. */
+  onSaveChartAsDefault?: (config: ChartConfig) => void
   /** Height in px of any fixed ribbon at the bottom of the viewport (SessionPanel / RunPanel).
    *  The panel height is reduced by this amount so its footer is never hidden behind the ribbon. */
   bottomOffset?: number
@@ -74,6 +81,9 @@ export default function NodeConfigPanel({
   onTemplateSaved,
   pipelineDir,
   onSetTemplate,
+  chartConfig,
+  onSaveChartForNode,
+  onSaveChartAsDefault,
   bottomOffset = 0,
 }: NodeConfigPanelProps) {
   const [params, setParams] = useState<Record<string, unknown>>(data.params ?? {})
@@ -197,20 +207,35 @@ export default function NodeConfigPanel({
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateDesc, setTemplateDesc] = useState('')
+  const [templateTags, setTemplateTags] = useState('')
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null)
   const [templateSaved, setTemplateSaved] = useState(false)
 
-  async function handleSaveAsTemplate() {
+  const [templateConflict, setTemplateConflict] = useState<string | null>(null)
+
+  async function handleSaveAsTemplate(force = false) {
     if (!workspace || !templateName.trim()) return
     setTemplateSaving(true)
     setTemplateSaveError(null)
+    setTemplateConflict(null)
     try {
       const slug = templateName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      const yamlPath = `${workspace}/node_templates/${slug}.yaml`
+
+      // Conflict check — warn before overwriting an existing template
+      if (!force && await workspaceFileExists(yamlPath)) {
+        setTemplateConflict(yamlPath)
+        setTemplateSaving(false)
+        return
+      }
+
+      const parsedTags = templateTags.split(',').map((t) => t.trim()).filter(Boolean)
       const templateObj: Record<string, unknown> = {
         node_type: data.node_type,
         label: templateName.trim(),
         description: templateDesc.trim() || data.description || '',
+        ...(parsedTags.length > 0 ? { tags: parsedTags } : {}),
         params: { ...params },
       }
 
@@ -219,7 +244,9 @@ export default function NodeConfigPanel({
       //   {workspace}/node_templates/{template_file}
       // so the SQL file must live there, not in the originating pipeline's templates/ dir.
       if ((isSqlNode || isSqlParamNode) && sqlContent.trim()) {
-        const sqlFilename = `${slug}.sql.j2`
+        // Suffix with nodeId to avoid collisions between same-named templates
+        // from different pipelines sharing the node_templates/ directory.
+        const sqlFilename = `${slug}_${nodeId}.sql.j2`
         const sqlPath = `${workspace}/node_templates/${sqlFilename}`
         await writeWorkspaceFile(sqlPath, sqlContent)
         templateObj.template_file = sqlFilename
@@ -230,12 +257,12 @@ export default function NodeConfigPanel({
       }
 
       const content = yaml.dump(templateObj, { lineWidth: 120 })
-      const path = `${workspace}/node_templates/${slug}.yaml`
-      await writeWorkspaceFile(path, content)
+      await writeWorkspaceFile(yamlPath, content)
       setTemplateSaved(true)
       setShowSaveTemplate(false)
       setTemplateName('')
       setTemplateDesc('')
+      setTemplateTags('')
       onTemplateSaved?.()
     } catch (e) {
       setTemplateSaveError(String(e))
@@ -516,6 +543,10 @@ export default function NodeConfigPanel({
             nodeId={nodeId}
             onClose={() => setShowPreviewModal(false)}
             fetchFn={(_runId, _nodeId, limit, whereClause) => onPreview(nodeId, limit, whereClause)}
+            chartConfig={chartConfig}
+            canSave={!!(onSaveChartForNode || onSaveChartAsDefault)}
+            onSaveChartForNode={onSaveChartForNode ? (cfg) => onSaveChartForNode(nodeId, cfg) : undefined}
+            onSaveChartAsDefault={onSaveChartAsDefault}
           />
         )}
 
@@ -619,22 +650,47 @@ export default function NodeConfigPanel({
             value={templateDesc}
             onChange={(e) => setTemplateDesc(e.target.value)}
           />
+          <input
+            style={{ ...styles.input, marginTop: 4 }}
+            placeholder="Tags (optional, comma-separated — e.g. finance, daily)"
+            value={templateTags}
+            onChange={(e) => setTemplateTags(e.target.value)}
+          />
           <div style={styles.saveTemplateHint}>
             Saves to <code style={styles.code}>{workspace}/node_templates/</code>
           </div>
           {templateSaveError && <div style={styles.errorNote}>{templateSaveError}</div>}
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button
-              onClick={handleSaveAsTemplate}
-              disabled={templateSaving || !templateName.trim()}
-              style={{ ...styles.runBtn, flex: 1, opacity: !templateName.trim() ? 0.4 : 1 }}
-            >
-              {templateSaving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={() => setShowSaveTemplate(false)} style={styles.cancelBtn}>
-              Cancel
-            </button>
-          </div>
+          {templateConflict && (
+            <div style={styles.conflictNote}>
+              A template with this name already exists. Overwrite it?
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button
+                  onClick={() => handleSaveAsTemplate(true)}
+                  disabled={templateSaving}
+                  style={{ ...styles.runBtn, background: '#f38ba822', border: '1px solid #f38ba844', color: '#f38ba8' }}
+                >
+                  Overwrite
+                </button>
+                <button onClick={() => setTemplateConflict(null)} style={styles.cancelBtn}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {!templateConflict && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button
+                onClick={() => handleSaveAsTemplate(false)}
+                disabled={templateSaving || !templateName.trim()}
+                style={{ ...styles.runBtn, flex: 1, opacity: !templateName.trim() ? 0.4 : 1 }}
+              >
+                {templateSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setShowSaveTemplate(false)} style={styles.cancelBtn}>
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1066,6 +1122,7 @@ const styles: Record<string, React.CSSProperties> = {
   aiNote: { background: '#1e1e2e', border: '1px solid #89b4fa44', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#89b4fa', lineHeight: 1.5 },
   aiIcon: { marginRight: 4 },
   errorNote: { background: '#f38ba822', border: '1px solid #f38ba844', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f38ba8' },
+  conflictNote: { background: '#fab38722', border: '1px solid #fab38744', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#fab387' },
   inspectingNote: { padding: '4px 14px', fontSize: 11, color: '#6c7086', fontStyle: 'italic', borderBottom: '1px solid #313244' },
   aiBtn: { flex: '1 1 auto', minWidth: 80, background: '#89b4fa22', border: '1px solid #89b4fa44', color: '#89b4fa', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
   runBtn: { flex: '1 1 auto', minWidth: 90, background: '#a6e3a122', border: '1px solid #a6e3a144', color: '#a6e3a1', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
