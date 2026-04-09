@@ -639,6 +639,72 @@ def _handle_export_dta(
     df.to_stata(output_path, write_index=False)
 
 
+def _handle_load_ssas(
+    node: NodeSpec,
+    spec: PipelineSpec,
+    session: Session,
+    store: IntermediateStore,
+    templates_dir: Path | None,
+) -> None:
+    """Load data from a SQL Server Analysis Services (SSAS) cube via an MDX query.
+
+    Renders a Jinja2 MDX template (node.template) and executes it against the SSAS
+    server using the ``pyadomd`` library (ADOMD.NET wrapper).
+
+    Connection resolution order:
+    1. ``connection_string`` param — used as-is.
+    2. Inline params — ``server``, ``catalog``, ``uid``, ``pwd``, ``trusted``.
+
+    Requirements:
+        - ``pip install pyadomd``
+        - Microsoft ADOMD.NET client libraries installed on the machine.
+    """
+    try:
+        from pyadomd import Pyadomd  # type: ignore[import-untyped]
+    except ImportError:
+        raise ImportError(
+            "pyadomd is required for load_ssas nodes. "
+            "Install it with: pip install pyadomd\n"
+            "Also ensure the ADOMD.NET client libraries are installed "
+            "(included with SQL Server client tools or SSAS Management Studio)."
+        ) from None
+
+    # Build connection string
+    conn_str: str | None = node.params.get("connection_string") or None
+    if not conn_str:
+        server = node.params.get("server") or ""
+        catalog = node.params.get("catalog") or ""
+        uid = node.params.get("uid") or None
+        pwd = node.params.get("pwd") or None
+        trusted = node.params.get("trusted", True)
+
+        parts = ["Provider=MSOLAP"]
+        if server:
+            parts.append(f"Data Source={server}")
+        if catalog:
+            parts.append(f"Initial Catalog={catalog}")
+        if trusted:
+            parts.append("Integrated Security=SSPI")
+        else:
+            if uid:
+                parts.append(f"User ID={uid}")
+            if pwd:
+                parts.append(f"Password={pwd}")
+        conn_str = ";".join(parts)
+
+    mdx = _render_template(node, templates_dir)
+
+    with Pyadomd(conn_str) as conn:
+        with conn.cursor().execute(mdx) as cur:
+            columns = [col.name for col in cur.description]
+            data = cur.fetchall()
+
+    df = pd.DataFrame(data, columns=columns)
+
+    if node.output is not None:
+        store.put(node.output, df)
+
+
 def _handle_load_internal_api(
     node: NodeSpec,
     spec: PipelineSpec,
@@ -658,6 +724,7 @@ _HANDLERS: dict[str, _Handler] = {
     "load_duckdb": _handle_load_duckdb,
     "load_file": _handle_load_file,
     "load_odbc": _handle_load_odbc,
+    "load_ssas": _handle_load_ssas,
     "load_rest_api": _handle_load_rest_api,
     "push_odbc": _handle_push_odbc,
     "push_duckdb": _handle_push_duckdb,

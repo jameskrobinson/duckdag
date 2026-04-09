@@ -253,6 +253,52 @@ export interface PaletteResponse {
   sinks: PaletteFunction[]
 }
 
+// ---------------------------------------------------------------------------
+// SSAS Cube Browser types
+// ---------------------------------------------------------------------------
+
+export interface SSASCubeInfo {
+  name: string
+}
+
+export interface SSASLevel {
+  name: string
+  unique_name: string
+  level_number: number
+}
+
+export interface SSASHierarchy {
+  name: string
+  unique_name: string
+  levels: SSASLevel[]
+}
+
+export interface SSASDimension {
+  name: string
+  unique_name: string
+  is_measures: boolean
+  hierarchies: SSASHierarchy[]
+}
+
+export interface SSASMeasure {
+  name: string
+  unique_name: string
+  display_folder: string
+}
+
+export interface SSASMetadata {
+  cubes: SSASCubeInfo[]
+  dimensions: SSASDimension[]
+  measures: SSASMeasure[]
+}
+
+export interface SSASMember {
+  name: string
+  unique_name: string
+  caption: string
+}
+
+// ---------------------------------------------------------------------------
 // Variable declarations (from pipeline.yaml variable_declarations block)
 export interface VariableDeclaration {
   name: string

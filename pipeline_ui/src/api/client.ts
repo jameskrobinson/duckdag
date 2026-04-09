@@ -11,6 +11,8 @@ import type {
   RunResponse,
   SessionNodeResponse,
   SessionResponse,
+  SSASMetadata,
+  SSASMember,
   SuggestConfigResponse,
   VariableDeclaration,
   WorkspacePipelineFile,
@@ -346,6 +348,40 @@ export interface PaletteTagEntry {
 export function fetchPaletteTags(workspace?: string): Promise<PaletteTagEntry[]> {
   const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
   return request<PaletteTagEntry[]>(`/palette/tags${q}`)
+}
+
+// ---------------------------------------------------------------------------
+// SSAS Cube Browser
+// ---------------------------------------------------------------------------
+
+export interface SSASConnectionParams {
+  server?: string
+  catalog?: string
+  cube?: string
+  uid?: string
+  pwd?: string
+  trusted?: boolean
+  connection_string?: string
+}
+
+export function fetchSSASMetadata(params: SSASConnectionParams): Promise<SSASMetadata> {
+  return request<SSASMetadata>('/ssas/metadata', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
+export function fetchSSASMembers(
+  connection: SSASConnectionParams,
+  cube: string,
+  hierarchy_unique_name: string,
+  level_number: number = 0,
+  max_members: number = 200,
+): Promise<{ members: SSASMember[] }> {
+  return request<{ members: SSASMember[] }>('/ssas/members', {
+    method: 'POST',
+    body: JSON.stringify({ connection, cube, hierarchy_unique_name, level_number, max_members }),
+  })
 }
 
 export function suggestConfig(

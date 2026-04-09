@@ -28,6 +28,7 @@ NodeType = Literal[
     "sql_transform",
     "pandas_transform",
     "load_odbc",
+    "load_ssas",
     "load_file",
     "load_duckdb",
     "load_rest_api",

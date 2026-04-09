@@ -86,7 +86,7 @@ export default function PipelineNode({ data, selected }: NodeProps<Node<BuilderN
 }
 
 function getCategoryForType(nodeType: string): string {
-  if (['load_odbc', 'load_file', 'load_duckdb', 'load_internal_api', 'load_rest_api'].includes(nodeType)) return 'load'
+  if (['load_odbc', 'load_ssas', 'load_file', 'load_duckdb', 'load_internal_api', 'load_rest_api'].includes(nodeType)) return 'load'
   if (['sql_exec', 'sql_transform'].includes(nodeType)) return 'sql'
   if (['pandas_transform'].includes(nodeType)) return 'transform'
   if (['export_dta', 'push_odbc', 'push_duckdb'].includes(nodeType)) return 'export'
