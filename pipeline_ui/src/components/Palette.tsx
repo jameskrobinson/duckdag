@@ -83,7 +83,7 @@ function ConfigRow({
 
   return (
     <div
-      draggable={!hovered || !canManage}
+      draggable
       onDragStart={(e) => setDragPayload(e, fn.node_type, cfg.label, cfg.params, cfg.template_file, cfg.template_path)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

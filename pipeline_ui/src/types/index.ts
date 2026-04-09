@@ -84,6 +84,7 @@ export interface ServiceEdge {
 export interface DagResponse {
   nodes: ServiceNode[]
   edges: ServiceEdge[]
+  warnings: string[]
 }
 
 // Execute-node response
@@ -221,6 +222,7 @@ export interface PaletteConfig {
   template_path?: string
   sql_preview?: string
   tags?: string[]
+  companion_files?: Record<string, string>
 }
 
 export interface PaletteFunction {
@@ -299,4 +301,6 @@ export interface NodeTemplate {
   tags?: string[]
   /** Declared palette category for SQL templates (from -- category: front-matter) */
   category?: string
+  /** Additional files bundled with this template (param name → relative file path) */
+  companion_files?: Record<string, string>
 }

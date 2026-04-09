@@ -33,7 +33,12 @@ def _get_nested(obj: Any, path: str) -> Any:
     return current
 
 
-def _resolve_value(value: Any, context: dict[str, Any]) -> Any:
+def _resolve_value(
+    value: Any,
+    context: dict[str, Any],
+    strict: bool = True,
+    warnings: list[str] | None = None,
+) -> Any:
     """Recursively resolve ${...} references in a value.
 
     Two substitution modes:
@@ -44,6 +49,13 @@ def _resolve_value(value: Any, context: dict[str, Any]) -> Any:
 
     Non-string scalars, dicts, and lists are traversed recursively;
     non-strings are returned unchanged.
+
+    Args:
+        strict: If ``False``, unresolvable references are left as-is (the
+                original ``${path}`` placeholder) and a warning is appended to
+                *warnings* rather than raising a ``KeyError``.
+        warnings: Optional list to collect unresolved reference messages when
+                  ``strict=False``.
     """
     if isinstance(value, str):
         matches = _INTERP_RE.findall(value)
@@ -51,16 +63,30 @@ def _resolve_value(value: Any, context: dict[str, Any]) -> Any:
             return value
         # Whole-value substitution — preserve the original type.
         if len(matches) == 1 and value.strip() == f"${{{matches[0]}}}":
-            return _get_nested(context, matches[0])
+            if strict:
+                return _get_nested(context, matches[0])
+            try:
+                return _get_nested(context, matches[0])
+            except KeyError as exc:
+                if warnings is not None:
+                    warnings.append(str(exc))
+                return value  # return placeholder unchanged
         # Partial string interpolation — all referenced values become strings.
         def _replace(m: re.Match) -> str:  # noqa: ANN202
-            return str(_get_nested(context, m.group(1)))
+            if strict:
+                return str(_get_nested(context, m.group(1)))
+            try:
+                return str(_get_nested(context, m.group(1)))
+            except KeyError as exc:
+                if warnings is not None:
+                    warnings.append(str(exc))
+                return m.group(0)  # leave ${path} unchanged
 
         return _INTERP_RE.sub(_replace, value)
     elif isinstance(value, dict):
-        return {k: _resolve_value(v, context) for k, v in value.items()}
+        return {k: _resolve_value(v, context, strict=strict, warnings=warnings) for k, v in value.items()}
     elif isinstance(value, list):
-        return [_resolve_value(item, context) for item in value]
+        return [_resolve_value(item, context, strict=strict, warnings=warnings) for item in value]
     return value
 
 
@@ -74,6 +100,8 @@ def resolve_variables(
     raw: dict[str, Any],
     env: dict[str, Any] | None = None,
     variables: dict[str, Any] | None = None,
+    strict: bool = True,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Substitute ${...} references throughout a raw pipeline dict.
 
@@ -88,12 +116,16 @@ def resolve_variables(
         raw: The raw pipeline dict as loaded from YAML (pre-validation).
         env: Optional pre-loaded environment dict.
         variables: Optional pre-loaded variables dict.
+        strict: If ``False``, unresolvable references are left as-is rather
+                than raising ``KeyError``.  Any warnings are appended to *warnings*.
+        warnings: Optional list to collect unresolved reference messages when
+                  ``strict=False``.
 
     Returns:
         A new dict with all ${...} references replaced.
 
     Raises:
-        KeyError: If any reference cannot be resolved.
+        KeyError: If any reference cannot be resolved (only when ``strict=True``).
     """
     # Seed defaults from variable_declarations so pipelines resolve even when
     # no variables.yaml is provided. Explicitly supplied variables take priority.
@@ -108,4 +140,4 @@ def resolve_variables(
         "variables": merged_variables,
         "env": env or {},
     }
-    return _resolve_value(raw, context)
+    return _resolve_value(raw, context, strict=strict, warnings=warnings)

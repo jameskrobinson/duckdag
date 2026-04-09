@@ -446,6 +446,11 @@ export default function App() {
       pushHistory()
       setNodes(newNodes)
       setEdges(newEdges)
+
+      if (dag.warnings && dag.warnings.length > 0) {
+        const unique = [...new Set(dag.warnings)]
+        alert(`Pipeline loaded with warnings:\n\n${unique.join('\n')}`)
+      }
     } catch (e) {
       console.error('Load pipeline failed:', e)
       alert(`Failed to load pipeline: ${e}`)
