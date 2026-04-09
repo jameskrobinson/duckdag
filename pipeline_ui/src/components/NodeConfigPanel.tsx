@@ -3,14 +3,17 @@ import type { BuilderNodeData, ColumnSchema, DQCheck, DQCheckType, LineageRow, N
 import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, workspaceFileExists, writeWorkspaceFile } from '../api/client'
 import * as yaml from 'js-yaml'
 import SqlEditor from './SqlEditor'
+import SSASCubeBrowser, { type CubeBrowserState } from './SSASCubeBrowser'
 import NodeOutputPreview from './NodeOutputPreview'
 import type { ChartConfig } from './ChartView'
 
 /** Context so ParamField can access variable names without prop drilling */
 const VariableNamesContext = createContext<string[]>([])
 
-// Template-based SQL nodes: SQL lives in a .sql.j2 file, loaded from workspace
-const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec', 'load_odbc'])
+// Template-based SQL/MDX nodes: query lives in a template file, loaded from workspace
+const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec', 'load_odbc', 'load_ssas'])
+// Node types that use MDX instead of SQL (changes editor label / default filename)
+const MDX_NODE_TYPES = new Set(['load_ssas'])
 // Nodes that can have SQL in either a template file OR an inline param ('query')
 // Once the user saves to a file, template_file is set and they behave like SQL_NODE_TYPES.
 const SQL_PARAM_NODE_TYPES = new Set(['load_duckdb'])
@@ -109,6 +112,9 @@ export default function NodeConfigPanel({
   const [sqlSaveError, setSqlSaveError] = useState<string | null>(null)
   const [sqlDirty, setSqlDirty] = useState(false)
 
+  // SSAS Cube Browser modal
+  const [showCubeBrowser, setShowCubeBrowser] = useState(false)
+
   // Save-to-file prompt — shown when the user clicks Save but no template file is linked yet
   const [saveToFilePrompt, setSaveToFilePrompt] = useState(false)
   const [pendingSqlForFile, setPendingSqlForFile] = useState('')
@@ -159,7 +165,8 @@ export default function NodeConfigPanel({
     if (!templatePath) {
       if (!pipelineDir) return  // can't construct a path without knowing the pipeline dir
       setPendingSqlForFile(sql)
-      setFilenameDraft(`${nodeId}.sql.j2`)
+      const ext = MDX_NODE_TYPES.has(data.node_type) ? '.mdx.j2' : '.sql.j2'
+      setFilenameDraft(`${nodeId}${ext}`)
       setFilenameSaveError(null)
       setSaveToFilePrompt(true)
       return
@@ -437,13 +444,28 @@ export default function NodeConfigPanel({
           </div>
         )}
 
-        {/* SQL editor — all SQL-capable nodes */}
+        {/* SQL / MDX editor — all SQL/MDX-capable nodes */}
         {(isSqlNode || isSqlParamNode) && (
           <div style={styles.sqlSection}>
-            <div style={styles.sectionLabel}>
-              {templateFilename
-                ? <span>SQL — <span style={styles.templateFilename}>{templateFilename}</span></span>
-                : 'SQL'}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={styles.sectionLabel}>
+                {MDX_NODE_TYPES.has(data.node_type)
+                  ? templateFilename
+                    ? <span>MDX — <span style={styles.templateFilename}>{templateFilename}</span></span>
+                    : 'MDX'
+                  : templateFilename
+                    ? <span>SQL — <span style={styles.templateFilename}>{templateFilename}</span></span>
+                    : 'SQL'}
+              </div>
+              {MDX_NODE_TYPES.has(data.node_type) && (
+                <button
+                  onClick={() => setShowCubeBrowser(true)}
+                  title="Open Cube Browser to graphically build MDX"
+                  style={styles.cubeBrowserBtn}
+                >
+                  Cube Browser
+                </button>
+              )}
             </div>
 
             {/* Save-to-file prompt — shown when no template file is linked yet and user clicks Save */}
@@ -482,7 +504,9 @@ export default function NodeConfigPanel({
             {!sqlLoading && (
               <>
                 {!templatePath && !isSqlParamNode && pipelineDir && (
-                  <div style={styles.sqlNewFileHint}>SQL will be saved to a new file in <span style={styles.saveToFilePath}>templates/</span> on first Save.</div>
+                  <div style={styles.sqlNewFileHint}>
+                    {MDX_NODE_TYPES.has(data.node_type) ? 'MDX' : 'SQL'} will be saved to a new file in <span style={styles.saveToFilePath}>templates/</span> on first Save.
+                  </div>
                 )}
                 <SqlEditor
                   value={sqlContent}
@@ -694,6 +718,31 @@ export default function NodeConfigPanel({
         </div>
       )}
     </div>
+
+    {/* SSAS Cube Browser modal */}
+    {showCubeBrowser && MDX_NODE_TYPES.has(data.node_type) && (
+      <SSASCubeBrowser
+        connection={{
+          server: params.server as string | undefined,
+          catalog: params.catalog as string | undefined,
+          cube: params.cube as string | undefined,
+          uid: params.uid as string | undefined,
+          pwd: params.pwd as string | undefined,
+          trusted: params.trusted as boolean | undefined,
+          connection_string: params.connection_string as string | undefined,
+        }}
+        onApply={(mdx, state) => {
+          setSqlContent(mdx)
+          setSqlDirty(true)
+          setShowCubeBrowser(false)
+          onUpdate(nodeId, { ...params, _cube_browser_state: state })
+        }}
+        onClose={() => setShowCubeBrowser(false)}
+        onPreview={onRunSqlDraft ? (mdx) => onRunSqlDraft(nodeId, mdx) : undefined}
+        initialState={params._cube_browser_state as CubeBrowserState | undefined}
+        snippetWorkspace={workspace}
+      />
+    )}
     </VariableNamesContext.Provider>
   )
 }
@@ -1090,6 +1139,10 @@ const styles: Record<string, React.CSSProperties> = {
   saveToFileInput: {
     flex: 1, background: '#11111b', border: '1px solid #45475a', borderRadius: 4,
     color: '#cdd6f4', fontSize: 12, padding: '4px 8px', outline: 'none', fontFamily: 'monospace',
+  },
+  cubeBrowserBtn: {
+    background: '#cba6f722', border: '1px solid #cba6f744', color: '#cba6f7',
+    borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 10, fontWeight: 600,
   },
   saveToFileBtn: {
     background: '#a6e3a122', border: '1px solid #a6e3a144', color: '#a6e3a1',

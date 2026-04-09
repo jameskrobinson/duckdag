@@ -188,6 +188,73 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         tags=["load", "odbc", "database", "sql", "source"],
     ),
     NodeTypeSchema(
+        type="load_ssas",
+        label="Load from SSAS Cube",
+        description=(
+            "Execute an MDX query against a SQL Server Analysis Services (SSAS) cube "
+            "and load the result as a DataFrame. "
+            "Supply connection details inline (server, catalog, cube) or provide a full connection string. "
+            "Use ${env.xxx} references for sensitive values such as passwords. "
+            "The MDX query lives in a Jinja2 template file (.mdx.j2). "
+            "Use the Cube Browser to visually build the MDX query."
+        ),
+        category="load",
+        needs_template=True,
+        produces_output=True,
+        reads_store_inputs=False,
+        fixed_params=[
+            ParamSchema(
+                name="connection_string",
+                type="string",
+                required=False,
+                description=(
+                    "Full MSOLAP connection string "
+                    "(e.g. 'Provider=MSOLAP;Data Source=…;Initial Catalog=…'). "
+                    "If set, takes precedence over all other connection params."
+                ),
+            ),
+            ParamSchema(
+                name="server",
+                type="string",
+                required=False,
+                description="SSAS server hostname or IP address. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="catalog",
+                type="string",
+                required=False,
+                description="SSAS database (catalog) name, e.g. 'Adventure Works DW'.",
+            ),
+            ParamSchema(
+                name="cube",
+                type="string",
+                required=False,
+                description="Cube name within the catalog, e.g. 'Adventure Works'. Used by the Cube Browser.",
+            ),
+            ParamSchema(
+                name="trusted",
+                type="boolean",
+                required=False,
+                description="Use Windows integrated (Kerberos/NTLM) authentication. Default: true.",
+                default=True,
+            ),
+            ParamSchema(
+                name="uid",
+                type="string",
+                required=False,
+                description="Username for basic authentication. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="pwd",
+                type="password",
+                required=False,
+                description="Password. Use ${env.xxx} to avoid storing credentials in pipeline.yaml.",
+            ),
+        ],
+        accepts_template_params=True,
+        tags=["load", "ssas", "olap", "mdx", "cube", "analysis-services", "source"],
+    ),
+    NodeTypeSchema(
         type="load_file",
         label="Load File",
         description=(
