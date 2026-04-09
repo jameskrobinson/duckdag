@@ -25,6 +25,9 @@ interface WorkspaceBarProps {
   pipelineName?: string
   /** When set, shows a "New" button to create a new pipeline in the workspace. */
   onNewPipeline?: () => void
+  /** When set, shows a lineage overlay toggle button (requires an active session). */
+  onToggleLineage?: () => void
+  lineageActive?: boolean
 }
 
 /**
@@ -51,6 +54,8 @@ export default function WorkspaceBar({
   onRedo,
   pipelineName,
   onNewPipeline,
+  onToggleLineage,
+  lineageActive = false,
 }: WorkspaceBarProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(workspace)
@@ -164,6 +169,15 @@ export default function WorkspaceBar({
         >
           ⚙ Vars
         </button>
+        {onToggleLineage && (
+          <button
+            onClick={onToggleLineage}
+            style={{ ...styles.btn, ...(lineageActive ? styles.lineageActiveBtn : styles.lineageBtn) }}
+            title={lineageActive ? 'Hide column lineage overlay' : 'Show column lineage overlay'}
+          >
+            ⊕ Lineage
+          </button>
+        )}
         <button
           onClick={onToggleYamlPreview}
           style={{ ...styles.btn, ...(yamlPreviewOpen ? styles.btnActive : {}) }}
@@ -293,5 +307,15 @@ const styles: Record<string, React.CSSProperties> = {
   historyBtn: {
     padding: '4px 8px',
     fontSize: 13,
+  },
+  lineageBtn: {
+    background: '#89dceb0a',
+    border: '1px solid #89dceb33',
+    color: '#6c7086',
+  },
+  lineageActiveBtn: {
+    background: '#89dceb22',
+    border: '1px solid #89dceb66',
+    color: '#89dceb',
   },
 }

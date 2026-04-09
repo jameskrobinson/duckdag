@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NodePreviewResponse } from '../types'
 import type { ChartConfig } from './ChartView'
 import ChartView from './ChartView'
+import { downloadCsv } from '../utils/csv'
 
 type Tab = 'table' | 'chart'
 
@@ -111,6 +112,15 @@ export default function NodeOutputPreview({
                 ? <><span style={styles.filteredBadge}>filtered</span> {rowsShown.toLocaleString()} rows</>
                 : <>showing {rowsShown.toLocaleString()} of {totalRows.toLocaleString()} rows</>}
             </span>
+          )}
+          {preview && preview.rows.length > 0 && (
+            <button
+              style={styles.csvBtn}
+              onClick={() => downloadCsv(preview.columns, preview.rows, `${nodeId}.csv`)}
+              title="Download as CSV"
+            >
+              ⬇ CSV
+            </button>
           )}
           <button onClick={onClose} style={styles.closeBtn} title="Close">✕</button>
         </div>
@@ -247,6 +257,10 @@ const styles: Record<string, React.CSSProperties> = {
   filteredBadge: {
     fontSize: 9, fontWeight: 700, color: '#f9e2af', background: '#f9e2af22',
     border: '1px solid #f9e2af44', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase',
+  },
+  csvBtn: {
+    background: '#313244', border: '1px solid #45475a', color: '#a6adc8',
+    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 10, fontWeight: 600, flexShrink: 0,
   },
   closeBtn: { background: 'none', border: 'none', color: '#6c7086', cursor: 'pointer', fontSize: 14, flexShrink: 0 },
 

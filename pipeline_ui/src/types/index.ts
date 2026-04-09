@@ -188,7 +188,7 @@ export interface LineageRow {
   output_column: string
   source_node_id: string
   source_column: string
-  confidence: 'sql_exact' | 'schema_diff'
+  confidence: 'sql_exact' | 'schema_diff' | 'tracked'
 }
 
 export type DQCheckType = 'row_count' | 'null_rate' | 'value_range' | 'unique'

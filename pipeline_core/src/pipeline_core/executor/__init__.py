@@ -12,8 +12,14 @@ from pipeline_core.lineage import (
     extract_sql_lineage,
     init_lineage_table,
     schema_diff_lineage,
+    tracking_lineage,
     write_lineage_rows,
 )
+from pipeline_core.lineage.tracking import TrackingProxy
+
+# Stores per-node column access data from the most recent pandas_transform call.
+# Keyed by node_id; consumed and cleared by _write_node_lineage.
+_pandas_tracking: dict[str, dict[str, set[str]]] = {}
 from pipeline_core.planner import ExecutionPlan
 from pipeline_core.resolver.models import NodeSpec, PipelineSpec, ShadowNodeSpec
 from pipeline_core.session import Session
@@ -173,8 +179,22 @@ def _handle_pandas_transform(
     except (ImportError, AttributeError, ValueError) as exc:
         raise ValueError(f"Node '{node.id}': cannot load transform '{transform_path}': {exc}") from exc
 
-    inputs = {inp: store.get(inp) for inp in node.inputs}
-    result_df = fn(inputs, node.params)
+    # Wrap each input in a TrackingProxy so column accesses are recorded
+    proxies = {inp: TrackingProxy(store.get(inp), inp) for inp in node.inputs}
+    result_df = fn(proxies, node.params)
+
+    # Collect access data; fall back to "all columns" for any all_read proxy
+    accessed: dict[str, set[str]] = {}
+    for inp, proxy in proxies.items():
+        if proxy.all_read:
+            # Positional/bulk access — treat all columns as read
+            try:
+                accessed[inp] = set(store.get(inp).columns)
+            except Exception:
+                accessed[inp] = set()
+        else:
+            accessed[inp] = proxy.accessed_columns
+    _pandas_tracking[node.id] = accessed
 
     if node.output is not None:
         store.put(node.output, result_df)
@@ -925,7 +945,12 @@ def _write_node_lineage(
             else:
                 rows = schema_diff_lineage(node.id, input_schemas, output_cols)
         else:
-            rows = schema_diff_lineage(node.id, input_schemas, output_cols)
+            # For pandas_transform: use tracked column access if recorded
+            tracked = _pandas_tracking.pop(node.id, None)
+            if tracked is not None:
+                rows = tracking_lineage(node.id, tracked, output_cols, input_schemas)
+            else:
+                rows = schema_diff_lineage(node.id, input_schemas, output_cols)
 
         write_lineage_rows(session.conn, rows)
 

@@ -294,10 +294,20 @@ def _local_from_sql_files(templates_dir: Path, id_prefix: str = "local/sql") -> 
     for scan_dir in scan_dirs:
         if not scan_dir.is_dir():
             continue
-        for sql_file in sorted(scan_dir.glob("*.sql")):
-            if sql_file.stem in seen_stems:
+        # Collect .sql and .sql.j2 files; deduplicate by stem (.sql takes priority)
+        candidates = sorted(
+            list(scan_dir.glob("*.sql")) + list(scan_dir.glob("*.sql.j2"))
+        )
+        for sql_file in candidates:
+            # Derive a stable stem: strip .j2 suffix first, then .sql
+            stem = sql_file.name
+            if stem.endswith(".sql.j2"):
+                stem = stem[: -len(".sql.j2")]
+            elif stem.endswith(".sql"):
+                stem = stem[: -len(".sql")]
+            if stem in seen_stems:
                 continue
-            seen_stems.add(sql_file.stem)
+            seen_stems.add(stem)
             try:
                 sql_text = sql_file.read_text(encoding="utf-8")
             except OSError:
@@ -306,10 +316,10 @@ def _local_from_sql_files(templates_dir: Path, id_prefix: str = "local/sql") -> 
             preview = sql_text[:400].strip()
             meta = _parse_sql_frontmatter(sql_text)
             tags = [t.strip() for t in meta["tags"].split(",")] if "tags" in meta else []
-            label = meta.get("label") or sql_file.stem.replace("_", " ").title()
+            label = meta.get("label") or stem.replace("_", " ").title()
             description = meta.get("description") or f"SQL template from {sql_file.name}"
             results.append(NodeTemplate(
-                id=f"{id_prefix}/{sql_file.stem}",
+                id=f"{id_prefix}/{stem}",
                 node_type=node_type,
                 label=label,
                 description=description,

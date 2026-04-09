@@ -21,6 +21,7 @@ import {
   type CompletionResult,
 } from '@codemirror/autocomplete'
 import type { ColumnSchema, NodePreviewResponse } from '../types'
+import { downloadCsv } from '../utils/csv'
 
 interface SqlEditorProps {
   /** Current SQL text */
@@ -278,6 +279,15 @@ function FullScreenSqlModal({
                   {runResult.total_rows > runResult.rows.length && ` — showing ${runResult.rows.length}`}
                   <span style={modalStyles.resultsColCount}> · {runResult.columns.length} columns</span>
                 </span>
+              )}
+              {runResult && runResult.rows.length > 0 && (
+                <button
+                  style={modalStyles.csvBtn}
+                  onClick={() => downloadCsv(runResult.columns, runResult.rows, `${filename ?? 'query'}_results.csv`)}
+                  title="Download results as CSV"
+                >
+                  ⬇ CSV
+                </button>
               )}
             </div>
             {runResult && runResult.rows.length > 0 && (
@@ -592,8 +602,13 @@ const modalStyles: Record<string, React.CSSProperties> = {
     minHeight: 28,
     display: 'flex',
     alignItems: 'center',
+    gap: 10,
   },
-  resultsLabel: { fontSize: 11, color: '#a6adc8' },
+  resultsLabel: { fontSize: 11, color: '#a6adc8', flex: 1 },
+  csvBtn: {
+    background: '#313244', border: '1px solid #45475a', color: '#a6adc8',
+    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 10, fontWeight: 600, flexShrink: 0,
+  },
   resultsColCount: { color: '#6c7086' },
   resultsError: { fontSize: 11, color: '#f38ba8' },
   resultsEmpty: { fontSize: 11, color: '#6c7086', padding: '10px 14px' },

@@ -19,6 +19,7 @@ import type { ChartConfig } from './components/ChartView'
 import Palette from './components/Palette'
 import PipelineNode from './components/PipelineNode'
 import ContractEdge from './components/ContractEdge'
+import LineageEdge from './components/LineageEdge'
 import NodeConfigPanel from './components/NodeConfigPanel'
 import WorkspaceBar from './components/WorkspaceBar'
 import LoadPipelineModal from './components/LoadPipelineModal'
@@ -33,8 +34,8 @@ import TransformEditorPanel from './components/TransformEditorPanel'
 import TemplateEditModal from './components/TemplateEditModal'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
-import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchShadowResult, fetchShadowYaml, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeShadowYaml, writeSchemaFile, writeWorkspaceFile } from './api/client'
-import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PaletteConfig, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, ShadowDiffResult, ShadowNodeSpec, VariableDeclaration } from './types'
+import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchPipelineLineage, fetchShadowResult, fetchShadowYaml, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, patchNodeConfig, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeShadowYaml, writeSchemaFile, writeWorkspaceFile } from './api/client'
+import type { BuilderNodeData, ColumnSchema, LineageRow, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PaletteConfig, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, ShadowDiffResult, ShadowNodeSpec, VariableDeclaration } from './types'
 
 const nodeTypes: NodeTypes = {
   pipelineNode: PipelineNode as NodeTypes[string],
@@ -42,6 +43,7 @@ const nodeTypes: NodeTypes = {
 
 const edgeTypes = {
   contractEdge: ContractEdge,
+  lineage: LineageEdge,
 }
 
 const WORKSPACE_KEY = 'pipeline_workspace'
@@ -86,6 +88,7 @@ export default function App() {
     if (!undoStack.current.length) return
     // Cancel any pending debounced param-edit history so it doesn't fire after undo
     if (paramEditTimer.current) { clearTimeout(paramEditTimer.current); paramEditTimer.current = null; paramEditPreSnap.current = null }
+    if (writeBackTimer.current) { clearTimeout(writeBackTimer.current); writeBackTimer.current = null }
     const prev = undoStack.current[undoStack.current.length - 1]
     undoStack.current = undoStack.current.slice(0, -1)
     redoStack.current = [{ nodes: nodesRef.current, edges: edgesRef.current }, ...redoStack.current]
@@ -99,6 +102,7 @@ export default function App() {
     if (!redoStack.current.length) return
     // Cancel any pending debounced param-edit history
     if (paramEditTimer.current) { clearTimeout(paramEditTimer.current); paramEditTimer.current = null; paramEditPreSnap.current = null }
+    if (writeBackTimer.current) { clearTimeout(writeBackTimer.current); writeBackTimer.current = null }
     const next = redoStack.current[0]
     redoStack.current = redoStack.current.slice(1)
     undoStack.current = [...undoStack.current, { nodes: nodesRef.current, edges: edgesRef.current }]
@@ -149,6 +153,7 @@ export default function App() {
   // is one Ctrl+Z step rather than character-by-character).
   const paramEditTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const paramEditPreSnap = useRef<{ nodes: PipelineNode[]; edges: Edge[] } | null>(null)
+  const writeBackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Context menu for node right-click
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
@@ -171,6 +176,10 @@ export default function App() {
   const [sessionNodeStatuses, setSessionNodeStatuses] = useState<Record<string, SessionNodeResponse>>({})
   const sessionPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionWsRef = useRef<WebSocket | null>(null)
+
+  // Lineage overlay
+  const [showLineage, setShowLineage] = useState(false)
+  const [lineageEdges, setLineageEdges] = useState<import('@xyflow/react').Edge[]>([])
 
   // Git status for the loaded pipeline — shown as a warning when running with uncommitted changes
   const [hasUncommittedChanges, setHasUncommittedChanges] = useState(false)
@@ -531,6 +540,16 @@ export default function App() {
         return n
       })
     })
+
+    // Debounced write-back: persist params to the pipeline YAML on disk ~800 ms
+    // after the user stops typing. Silent no-op if no pipeline file is loaded.
+    if (pipelineFilePath) {
+      if (writeBackTimer.current) clearTimeout(writeBackTimer.current)
+      writeBackTimer.current = setTimeout(() => {
+        writeBackTimer.current = null
+        patchNodeConfig(nodeId, pipelineFilePath, params).catch(() => {/* best-effort */})
+      }, 800)
+    }
   }
 
   function handleDqChecksUpdate(nodeId: string, dq_checks: import('./types').DQCheck[]) {
@@ -651,6 +670,29 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------------------
+  // Transform stale marking
+  // ---------------------------------------------------------------------------
+
+  function handleTransformFileSaved(moduleStem: string) {
+    // Mark any pandas_transform node whose `transform` param references this module as stale,
+    // plus all their transitive downstream nodes.
+    setNodes((nds) => {
+      const toMark = new Set<string>()
+      for (const n of nds) {
+        if (n.data.node_type === 'pandas_transform') {
+          const ref: string = (n.data.params as Record<string, unknown>)?.transform as string ?? ''
+          if (ref === moduleStem || ref.startsWith(`${moduleStem}.`)) {
+            toMark.add(n.id)
+            for (const d of getDownstreamIds(n.id, edgesRef.current)) toMark.add(d)
+          }
+        }
+      }
+      if (toMark.size === 0) return nds
+      return nds.map((n) => toMark.has(n.id) ? { ...n, data: { ...n.data, stale: true } } : n)
+    })
+  }
+
+  // ---------------------------------------------------------------------------
   // Design-time schema inference
   // ---------------------------------------------------------------------------
 
@@ -672,6 +714,43 @@ export default function App() {
   async function handleFetchLineage(nodeId: string) {
     if (!activeSession) return []
     return fetchNodeLineage(activeSession.session_id, nodeId)
+  }
+
+  async function handleToggleLineage() {
+    const next = !showLineage
+    setShowLineage(next)
+    if (!next) {
+      setLineageEdges([])
+      return
+    }
+    if (!activeSession) return
+    try {
+      const rows: LineageRow[] = await fetchPipelineLineage(activeSession.session_id)
+      // Group rows by (source_node_id, node_id) pair
+      const grouped = new Map<string, LineageRow[]>()
+      for (const row of rows) {
+        const key = `${row.source_node_id}→${row.node_id}`
+        if (!grouped.has(key)) grouped.set(key, [])
+        grouped.get(key)!.push(row)
+      }
+      const syntheticEdges: import('@xyflow/react').Edge[] = []
+      for (const [key, mappings] of grouped) {
+        const [src, tgt] = key.split('→')
+        syntheticEdges.push({
+          id: `lineage-${src}-${tgt}`,
+          source: src,
+          target: tgt,
+          type: 'lineage',
+          data: { mappings },
+          selectable: false,
+          focusable: false,
+        })
+      }
+      setLineageEdges(syntheticEdges)
+    } catch {
+      // Lineage may not be available if session hasn't run yet
+      setLineageEdges([])
+    }
   }
 
   function handleDeleteNode(nodeId: string) {
@@ -967,6 +1046,8 @@ export default function App() {
     if (sessionPollRef.current) { clearInterval(sessionPollRef.current); sessionPollRef.current = null }
     setActiveSession(null)
     setSessionNodeStatuses({})
+    setShowLineage(false)
+    setLineageEdges([])
     setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, run_status: undefined } })))
   }
 
@@ -1157,6 +1238,8 @@ export default function App() {
           onUndo={handleUndo}
           onRedo={handleRedo}
           pipelineName={pipelineName}
+          onToggleLineage={activeSession ? handleToggleLineage : undefined}
+          lineageActive={showLineage}
         />
 
         {(validationErrors.length > 0 || validationWarnings.length > 0) && (
@@ -1174,7 +1257,7 @@ export default function App() {
           <div ref={reactFlowWrapper} style={styles.canvas}>
             <ReactFlow
               nodes={nodesForCanvas}
-              edges={edges}
+              edges={showLineage ? [...edges, ...lineageEdges] : edges}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               onNodesChange={onNodesChangeWrapped}
@@ -1274,6 +1357,7 @@ export default function App() {
           pipelineDir={pipelineDir}
           onClose={() => setShowTransformEditor(false)}
           onTransformsSaved={refreshTransforms}
+          onTransformFileSaved={handleTransformFileSaved}
         />
       )}
 

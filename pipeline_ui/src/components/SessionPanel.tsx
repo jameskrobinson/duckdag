@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { SessionNodeResponse, SessionResponse } from '../types'
-import { abandonSession, cancelSession, executeSession, finalizeSession, fetchSessionNodeOutput } from '../api/client'
+import { abandonSession, cancelSession, executeSession, finalizeSession, fetchSessionNodeOutput, rerunSessionNode } from '../api/client'
 import NodeOutputPreview from './NodeOutputPreview'
 
 interface SessionPanelProps {
@@ -45,6 +45,7 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
   const [abandoning, setAbandoning] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [reexecuting, setReexecuting] = useState(false)
+  const [rerunningNodeId, setRerunningNodeId] = useState<string | null>(null)
   const [showFinalizeConfirm, setShowFinalizeConfirm] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -95,6 +96,20 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
       setActionError(e instanceof Error ? e.message : 'Cancel failed')
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function handleRerunNode(nodeId: string, rerunAncestors = false) {
+    setRerunningNodeId(nodeId)
+    setActionError(null)
+    try {
+      const updated = await rerunSessionNode(session.session_id, nodeId, rerunAncestors)
+      onSessionUpdate(updated)
+      onReexecute?.()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Re-run failed')
+    } finally {
+      setRerunningNodeId(null)
     }
   }
 
@@ -228,20 +243,44 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
               const color = isWarning ? '#f9e2af' : (STATUS_COLOR[n.status] ?? '#6c7086')
               const icon = isWarning ? '⚠' : (STATUS_ICON[n.status] ?? '○')
               const canPreview = n.status === 'completed' && hasBundle
+              const canRerun = isActive && (n.status === 'completed' || n.status === 'failed')
+              const isRerunning = rerunningNodeId === n.node_id
               return (
                 <div key={n.node_id} style={styles.nodeRow} title={n.error ?? undefined}>
                   <span style={{ ...styles.nodeIcon, color }}>{icon}</span>
                   <span style={styles.nodeId}>{n.node_id}</span>
                   <span style={{ ...styles.nodeStatus, color }}>{isContractWarning ? 'contract ⚠' : isDqWarning ? 'dq ⚠' : n.status}</span>
                   {n.error && <span style={{ ...styles.nodeError, color: isWarning ? '#f9e2af' : '#f38ba8' }}>{n.error.slice(0, 80)}</span>}
-                  {canPreview && (
-                    <button
-                      style={styles.previewBtn}
-                      onClick={() => setPreviewNodeId(n.node_id)}
-                    >
-                      Preview
-                    </button>
-                  )}
+                  <span style={styles.nodeActions}>
+                    {canPreview && (
+                      <button
+                        style={styles.previewBtn}
+                        onClick={() => setPreviewNodeId(n.node_id)}
+                      >
+                        Preview
+                      </button>
+                    )}
+                    {canRerun && (
+                      <>
+                        <button
+                          style={{ ...styles.previewBtn, ...styles.rerunNodeBtn }}
+                          onClick={() => handleRerunNode(n.node_id)}
+                          disabled={isRerunning || rerunningNodeId !== null}
+                          title={`Re-run ${n.node_id} and downstream (reuse upstream cache)`}
+                        >
+                          {isRerunning ? '◌' : '↺'}
+                        </button>
+                        <button
+                          style={{ ...styles.previewBtn, ...styles.rerunNodeBtn, ...styles.rerunFromSourceBtn }}
+                          onClick={() => handleRerunNode(n.node_id, true)}
+                          disabled={isRerunning || rerunningNodeId !== null}
+                          title={`Re-run ${n.node_id} from source (invalidate all upstream nodes too)`}
+                        >
+                          {isRerunning ? '◌' : '↑↺'}
+                        </button>
+                      </>
+                    )}
+                  </span>
                 </div>
               )
             })}
@@ -310,9 +349,16 @@ const styles: Record<string, React.CSSProperties> = {
   nodeId: { color: '#cdd6f4', fontFamily: 'monospace', minWidth: 120 },
   nodeStatus: { fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: 70 },
   nodeError: { color: '#f38ba8', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 },
+  nodeActions: { display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto', flexShrink: 0 },
   previewBtn: {
     background: '#313244', border: '1px solid #45475a', color: '#a6adc8',
-    borderRadius: 4, padding: '1px 7px', cursor: 'pointer', fontSize: 10,
-    marginLeft: 'auto', flexShrink: 0,
+    borderRadius: 4, padding: '1px 7px', cursor: 'pointer', fontSize: 10, flexShrink: 0,
+  },
+  rerunNodeBtn: {
+    border: '1px solid #89b4fa44', color: '#89b4fa',
+    padding: '1px 5px', fontWeight: 700,
+  },
+  rerunFromSourceBtn: {
+    border: '1px solid #cba6f744', color: '#cba6f7',
   },
 }
