@@ -6,6 +6,8 @@ from pathlib import Path
 import yaml
 
 from pipeline_core.executor import ContractViolationError, DQCheckError, execute_step
+from pipeline_core.executor.shadow_executor import ShadowBreachError
+from pipeline_core.resolver.shadow_loader import ShadowConfigError, load_shadow_spec
 from pipeline_core.intermediate import DuckDBStore
 from pipeline_core.lineage import init_lineage_table
 from pipeline_core.planner import build_plan
@@ -119,6 +121,7 @@ def run_pipeline(
     workspace: str | None = None,
     pipeline_path: str | None = None,
     variables_yaml: str | None = None,
+    shadow_mode: bool = False,
 ) -> None:
     """Background task: resolve → plan → execute, updating run/node status throughout.
 
@@ -166,15 +169,33 @@ def run_pipeline(
                 )}
             )
 
+        # Load shadow specs if shadow mode requested
+        shadow_specs = None
+        if shadow_mode and pipeline_dir:
+            try:
+                shadow_specs = load_shadow_spec(pipeline_dir)
+                spec = spec.model_copy(update={"shadow_mode": True})
+            except ShadowConfigError as exc:
+                # Non-fatal — run without shadow if the YAML is malformed
+                import logging as _logging
+                _logging.getLogger(__name__).warning("Shadow config error: %s", exc)
+
         with Session(spec) as session:
             store = DuckDBStore(session.conn)
             for step in plan.pending:
                 db.update_node_run(run_id, step.node_id, "running", started_at=_now())
                 try:
-                    execute_step(step, spec, session, store)
+                    execute_step(step, spec, session, store, shadow_specs=shadow_specs)
                     db.update_node_run(
                         run_id, step.node_id, "completed", finished_at=_now()
                     )
+                except ShadowBreachError as sbe:
+                    # fail_pipeline breach — record on node and re-raise to abort the run
+                    db.update_node_run(
+                        run_id, step.node_id, "failed",
+                        finished_at=_now(), error=f"SHADOW: {sbe}",
+                    )
+                    raise
                 except ContractViolationError as cve:
                     db.update_node_run(
                         run_id, step.node_id, "completed",
@@ -222,6 +243,7 @@ def run_session(
     workspace: str | None = None,
     pipeline_path: str | None = None,
     variables_yaml: str | None = None,
+    shadow_mode: bool = False,
 ) -> None:
     """Background task for session-based execution.
 
@@ -335,6 +357,16 @@ def run_session(
 
         prior_completed -= stale_ids
 
+        # Load shadow specs if shadow mode requested
+        shadow_specs = None
+        if shadow_mode and pipeline_dir:
+            try:
+                shadow_specs = load_shadow_spec(pipeline_dir)
+                spec = spec.model_copy(update={"shadow_mode": True})
+            except ShadowConfigError as exc:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("Shadow config error: %s", exc)
+
         plan = build_plan(spec, completed=prior_completed)
 
         with Session(spec) as session:
@@ -356,7 +388,7 @@ def run_session(
                     continue
                 upsert_node(session.conn, step.node_id, "running", started_at=_now())
                 try:
-                    execute_step(step, spec, session, store)
+                    execute_step(step, spec, session, store, shadow_specs=shadow_specs)
                     t_hash = (
                         _compute_transform_hash(
                             str(step.node.params.get("transform", "")),
@@ -369,11 +401,14 @@ def run_session(
                         session.conn, step.node_id, "completed",
                         finished_at=_now(), transform_hash=t_hash,
                     )
+                except ShadowBreachError as sbe:
+                    # fail_pipeline breach — mark node failed and abort the run
+                    upsert_node(
+                        session.conn, step.node_id, "failed",
+                        finished_at=_now(), error=f"SHADOW: {sbe}",
+                    )
+                    raise
                 except ContractViolationError as cve:
-                    # Contract violations are warnings: node output was produced
-                    # but does not match the recorded schema. Mark completed with
-                    # a warning message so the UI can surface it without blocking
-                    # downstream nodes.
                     t_hash = (
                         _compute_transform_hash(str(step.node.params.get("transform", "")), spec.transforms_root)
                         if step.node.type == "pandas_transform" else None
@@ -383,8 +418,6 @@ def run_session(
                         finished_at=_now(), error=f"CONTRACT: {cve}", transform_hash=t_hash,
                     )
                 except DQCheckError as dqe:
-                    # DQ check failures are warnings: execution succeeded but data
-                    # quality assertions were not satisfied.
                     t_hash = (
                         _compute_transform_hash(str(step.node.params.get("transform", "")), spec.transforms_root)
                         if step.node.type == "pandas_transform" else None
