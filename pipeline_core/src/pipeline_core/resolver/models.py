@@ -71,6 +71,76 @@ class DQCheck(BaseModel):
         return self
 
 
+class ToleranceSpec(BaseModel):
+    """Per-column numeric tolerance for shadow diff checks."""
+
+    absolute: float | None = None
+    """Maximum allowed absolute difference between primary and shadow values."""
+    relative: float | None = None
+    """Maximum allowed relative difference (0–1, e.g. 0.01 = 1%)."""
+    pct_rows_allowed: float = 0.0
+    """Fraction of rows (0–1) allowed to breach the tolerance before the check fails."""
+
+
+class ShadowNodeSpec(BaseModel):
+    """Companion node spec for shadow/sidecar execution.
+
+    Stored in ``pipeline.shadow.yaml`` keyed by the primary node_id it shadows.
+    The shadow node receives the same inputs as the primary, runs its own
+    implementation, and its output is diffed against the primary's output.
+
+    pre/postprocess SQL:
+        ``preprocess_sql`` — optional DuckDB SQL executed against the shadow
+        node's input DataFrame *before* it is fed into the shadow handler.
+        The input is registered as a view named ``input``; the query must
+        return a new DataFrame (e.g. ``SELECT * FROM input WHERE ...``).
+
+        ``postprocess_sql`` — optional DuckDB SQL executed against the shadow
+        node's output DataFrame *after* the handler runs and *before* the
+        result is saved to the diff tables.  The output is registered as
+        ``output``; the query must return the post-processed DataFrame.
+    """
+
+    # Core node fields (same meaning as NodeSpec)
+    id: str
+    type: NodeType
+    inputs: list[str] = []
+    output: str | None = None
+    template: str | None = None
+    params: dict[str, Any] = {}
+    description: str | None = None
+
+    # Diff config
+    key_columns: list[str]
+    """Required — join columns for the FULL OUTER JOIN diff.  Must not be empty."""
+    tolerances: dict[str, ToleranceSpec] = {}
+    """Per-column tolerance overrides.  Columns not listed use default_tolerance."""
+    default_tolerance: ToleranceSpec = ToleranceSpec()
+    """Tolerance applied to columns not listed in ``tolerances``."""
+    on_breach: Literal["warn", "fail_node", "fail_pipeline"] = "warn"
+    """What to do when a tolerance breach is detected."""
+    compare_row_count: bool = True
+    """Whether row count differences count as a breach."""
+    row_count_tolerance_pct: float = 0.0
+    """Allowed row count difference as a fraction of primary row count (0–1)."""
+
+    # Pre/post-processing SQL
+    preprocess_sql: str | None = None
+    """Optional SQL applied to the input DataFrame before shadow execution.
+    Table name: ``input``.  Must SELECT a new DataFrame."""
+    postprocess_sql: str | None = None
+    """Optional SQL applied to the shadow output DataFrame before diff.
+    Table name: ``output``.  Must SELECT a new DataFrame."""
+
+    @model_validator(mode="after")
+    def _key_columns_nonempty(self) -> "ShadowNodeSpec":
+        if not self.key_columns:
+            raise ValueError(
+                f"ShadowNodeSpec for node '{self.id}' must have at least one key_column"
+            )
+        return self
+
+
 class NodeSpec(BaseModel):
     """Specification for a single pipeline node."""
 
@@ -165,6 +235,11 @@ class PipelineSpec(BaseModel):
 
     # Loaded from schema_path if the file exists; otherwise None.
     pipeline_schema: PipelineSchema | None = None
+
+    # Set by the service/CLI layer when a shadow run is requested.
+    # Not sourced from YAML — the executor checks this flag before attempting
+    # shadow execution so normal runs are completely unaffected.
+    shadow_mode: bool = False
 
     # Root directory to prepend to sys.path when importing workspace/pipeline-local
     # transform modules. Not sourced from YAML — set by the executor/service layer

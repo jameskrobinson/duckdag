@@ -62,6 +62,8 @@ class SessionRequest(BaseModel):
     """Absolute path to the workspace root. Required — sessions need a workspace."""
     pipeline_path: str | None = None
     """Absolute path to the pipeline YAML file (for active-session lookup and manifest)."""
+    shadow_mode: bool = False
+    """When True, loads pipeline.shadow.yaml and runs shadow nodes after each primary node."""
 
 
 class SessionResponse(BaseModel):
@@ -196,6 +198,7 @@ def create_session(
         workspace=body.workspace,
         pipeline_path=str(pipeline_path),
         variables_yaml=body.variables_yaml,
+        shadow_mode=body.shadow_mode,
     )
 
     row = db.get_session(session_id)
@@ -312,6 +315,8 @@ class ExecuteRequest(BaseModel):
     """Node IDs to force-re-run even if already completed.  The service resets
     their status to 'pending' in session.duckdb before planning, so the planner
     includes them in the next execution wave."""
+    shadow_mode: bool = False
+    """When True, activates shadow execution for this run."""
 
 
 @router.post("/{session_id}/execute", response_model=SessionResponse)
@@ -379,6 +384,7 @@ def execute_session(
         workspace=row.get("workspace"),
         pipeline_path=row.get("pipeline_path"),
         variables_yaml=variables_yaml,
+        shadow_mode=body.shadow_mode,
     )
 
     row = db.get_session(session_id)

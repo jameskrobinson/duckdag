@@ -162,7 +162,7 @@ export function fetchNodeOutput(run_id: string, node_id: string, limit = 1000, w
 export function createSession(
   pipeline_yaml: string,
   workspace: string,
-  options?: { env_yaml?: string; variables_yaml?: string; pipeline_path?: string },
+  options?: { env_yaml?: string; variables_yaml?: string; pipeline_path?: string; shadow_mode?: boolean },
 ): Promise<SessionResponse> {
   return request<SessionResponse>('/sessions', {
     method: 'POST',
@@ -205,10 +205,11 @@ export function executeSession(
   pipeline_yaml?: string,
   variables_yaml?: string,
   stale_node_ids?: string[],
+  shadow_mode?: boolean,
 ): Promise<SessionResponse> {
   return request<SessionResponse>(`/sessions/${session_id}/execute`, {
     method: 'POST',
-    body: JSON.stringify({ pipeline_yaml, variables_yaml, stale_node_ids }),
+    body: JSON.stringify({ pipeline_yaml, variables_yaml, stale_node_ids, shadow_mode }),
   })
 }
 
@@ -382,6 +383,32 @@ export function fetchSSASMembers(
     method: 'POST',
     body: JSON.stringify({ connection, cube, hierarchy_unique_name, level_number, max_members }),
   })
+}
+
+// ---------------------------------------------------------------------------
+// Shadow node
+// ---------------------------------------------------------------------------
+
+export function fetchShadowYaml(pipeline_path: string): Promise<{ content: string; exists: boolean }> {
+  return request(`/workspace/shadow?pipeline_path=${encodeURIComponent(pipeline_path)}`)
+}
+
+export function writeShadowYaml(
+  pipeline_path: string,
+  content: string,
+): Promise<{ content: string; exists: boolean }> {
+  return request('/workspace/shadow', {
+    method: 'POST',
+    body: JSON.stringify({ pipeline_path, content }),
+  })
+}
+
+export function fetchShadowResult(
+  session_id: string,
+  node_id: string,
+  limit = 100,
+): Promise<import('../types').ShadowDiffResult> {
+  return request(`/sessions/${session_id}/nodes/${node_id}/shadow?limit=${limit}`)
 }
 
 export function suggestConfig(

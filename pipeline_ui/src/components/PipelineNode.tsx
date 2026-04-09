@@ -58,6 +58,12 @@ export default function PipelineNode({ data, selected }: NodeProps<Node<BuilderN
         {varError && (
           <span style={styles.varErrorBadge} title="Missing variable reference">⚠ var</span>
         )}
+        {(data.shadow_breach as boolean | undefined) && (
+          <span style={styles.shadowBreachBadge} title="Shadow diff breach on last shadow run">⚠ shadow</span>
+        )}
+        {!(data.shadow_breach as boolean | undefined) && (data.has_shadow as boolean | undefined) && (
+          <span style={styles.shadowBadge} title="This node has a shadow companion">⊛</span>
+        )}
       </div>
 
       <div style={styles.label}>{data.label}</div>
@@ -170,6 +176,25 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fab387',
     background: '#fab38722',
     border: '1px solid #fab38755',
+    borderRadius: 3,
+    padding: '1px 4px',
+    letterSpacing: '0.02em',
+  },
+  shadowBadge: {
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#cba6f7',
+    background: '#cba6f722',
+    border: '1px solid #cba6f755',
+    borderRadius: 3,
+    padding: '1px 4px',
+  },
+  shadowBreachBadge: {
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#f38ba8',
+    background: '#f38ba822',
+    border: '1px solid #f38ba855',
     borderRadius: 3,
     padding: '1px 4px',
     letterSpacing: '0.02em',

@@ -53,6 +53,8 @@ class RunRequest(BaseModel):
 
     pipeline_path: str | None = None
     """Path to the pipeline YAML file within the workspace (for bundle manifest)."""
+    shadow_mode: bool = False
+    """When True, loads pipeline.shadow.yaml and runs shadow nodes after each primary node."""
 
 
 class ValidateRequest(BaseModel):

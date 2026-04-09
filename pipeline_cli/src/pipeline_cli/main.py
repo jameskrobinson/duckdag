@@ -24,6 +24,7 @@ from pipeline_core.intermediate import DuckDBStore, InMemoryStore
 from pipeline_core.planner import build_plan, ExecutionPlan
 from pipeline_core.resolver import resolve_pipeline
 from pipeline_core.resolver.models import PipelineSpec
+from pipeline_core.resolver.shadow_loader import load_shadow_spec, ShadowConfigError
 from pipeline_core.session import Session
 
 _WORKSPACE_ENV = "PIPELINE_WORKSPACE"
@@ -73,6 +74,12 @@ def cli() -> None:
     metavar="KEY=VALUE",
     help="Override a pipeline variable: --var start_date=2024-01-01 (repeatable).",
 )
+@click.option(
+    "--shadow", "shadow_mode",
+    is_flag=True,
+    default=False,
+    help="Run in shadow mode: load pipeline.shadow.yaml and execute shadow nodes alongside primary nodes, then diff outputs.",
+)
 def run(
     pipeline_yaml: Path,
     env_yaml: Optional[Path],
@@ -81,6 +88,7 @@ def run(
     dry_run: bool,
     verbose: bool,
     var_overrides: tuple[str, ...],
+    shadow_mode: bool,
 ) -> None:
     """Execute a pipeline defined in PIPELINE_YAML."""
     pipeline_yaml = pipeline_yaml.resolve()
@@ -102,6 +110,27 @@ def run(
     except Exception as exc:
         click.echo(f"[error] Failed to parse pipeline: {exc}", err=True)
         sys.exit(1)
+
+    # Load shadow specs if --shadow flag is set
+    shadow_specs = None
+    if shadow_mode:
+        pipeline_dir = pipeline_yaml.parent
+        try:
+            shadow_specs = load_shadow_spec(pipeline_dir)
+        except ShadowConfigError as exc:
+            click.echo(f"[error] shadow YAML is invalid: {exc}", err=True)
+            sys.exit(1)
+        except Exception as exc:
+            click.echo(f"[error] Failed to load shadow config: {exc}", err=True)
+            sys.exit(1)
+        if not shadow_specs:
+            click.echo(
+                f"[warn] --shadow specified but no pipeline.shadow.yaml found in {pipeline_dir}",
+                err=True,
+            )
+        else:
+            spec.shadow_mode = True
+            click.echo(f"[shadow] loaded {len(shadow_specs)} shadow node(s): {', '.join(shadow_specs)}")
 
     # Build execution plan
     try:
@@ -145,9 +174,11 @@ def run(
         with Session(spec) as session:
             store = DuckDBStore(session.conn)
             if verbose:
-                _execute_verbose(plan, spec, session, store)
+                _execute_verbose(plan, spec, session, store, shadow_specs=shadow_specs)
             else:
-                execute_plan(plan, spec, session, store)
+                execute_plan(plan, spec, session, store, shadow_specs=shadow_specs)
+            if shadow_specs and spec.shadow_mode:
+                _print_shadow_summary(session, shadow_specs)
         elapsed = time.perf_counter() - t0
     except Exception as exc:
         status = "failed"
@@ -199,14 +230,16 @@ def _execute_verbose(
     spec: PipelineSpec,
     session: Session,
     store: DuckDBStore,
+    shadow_specs: dict | None = None,
 ) -> None:
     from pipeline_core.executor import execute_step
 
     for step in plan.pending:
         t0 = time.perf_counter()
-        execute_step(step, spec, session, store)
+        execute_step(step, spec, session, store, shadow_specs=shadow_specs)
         elapsed = time.perf_counter() - t0
-        click.echo(f"  {step.node_id}  [{step.node.type}]  {elapsed:.3f}s")
+        shadow_marker = " ⊛" if (shadow_specs and step.node_id in shadow_specs) else ""
+        click.echo(f"  {step.node_id}  [{step.node.type}]  {elapsed:.3f}s{shadow_marker}")
 
 
 def _print_plan(plan: ExecutionPlan) -> None:
@@ -222,6 +255,57 @@ def _print_store_summary(store: DuckDBStore, plan: ExecutionPlan) -> None:
         if step.node.output and store.has(step.node.output):
             df = store.get(step.node.output)
             click.echo(f"  {step.node.output}: {len(df):,} rows × {len(df.columns)} cols")
+
+
+def _print_shadow_summary(session: Session, shadow_specs: dict) -> None:
+    """Query shadow summary tables and print a per-node results table."""
+    import re
+
+    def _safe(node_id: str) -> str:
+        return re.sub(r"[-.]", "_", node_id)
+
+    rows = []
+    for node_id in shadow_specs:
+        table = f"shadow.{_safe(node_id)}_summary"
+        try:
+            result = session.conn.execute(
+                f"SELECT * FROM {table} LIMIT 1"
+            ).fetchdf()
+        except Exception:
+            rows.append((node_id, "not_run", "—", "—", "—", "—"))
+            continue
+
+        if result.empty:
+            rows.append((node_id, "not_run", "—", "—", "—", "—"))
+            continue
+
+        r = result.iloc[0].to_dict()
+        status = str(r.get("status", "?"))
+        primary = f"{int(r.get('total_primary', 0)):,}"
+        shadow = f"{int(r.get('total_shadow', 0)):,}"
+        matched = f"{int(r.get('matched', 0)):,}"
+        breaches = int(r.get("breach_count", 0))
+        breach_str = str(breaches) if breaches == 0 else f"\033[31m{breaches}\033[0m"
+        rows.append((node_id, status, primary, shadow, matched, breach_str))
+
+    if not rows:
+        return
+
+    click.echo("\nShadow diff summary:")
+    click.echo(f"  {'NODE':<28}  {'STATUS':<12}  {'PRIMARY':>9}  {'SHADOW':>9}  {'MATCHED':>9}  BREACHES")
+    click.echo("  " + "─" * 84)
+    for node_id, status, primary, shadow, matched, breach_str in rows:
+        colour = {
+            "pass": "\033[32m",
+            "warn": "\033[33m",
+            "breach": "\033[31m",
+            "not_run": "\033[90m",
+        }.get(status, "")
+        reset = "\033[0m" if colour else ""
+        click.echo(
+            f"  {node_id:<28}  {colour}{status:<12}{reset}  "
+            f"{primary:>9}  {shadow:>9}  {matched:>9}  {breach_str}"
+        )
 
 
 # ---------------------------------------------------------------------------

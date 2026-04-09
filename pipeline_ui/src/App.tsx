@@ -33,8 +33,8 @@ import TransformEditorPanel from './components/TransformEditorPanel'
 import TemplateEditModal from './components/TemplateEditModal'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
-import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
-import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PaletteConfig, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, VariableDeclaration } from './types'
+import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchShadowResult, fetchShadowYaml, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeShadowYaml, writeSchemaFile, writeWorkspaceFile } from './api/client'
+import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PaletteConfig, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, ShadowDiffResult, ShadowNodeSpec, VariableDeclaration } from './types'
 
 const nodeTypes: NodeTypes = {
   pipelineNode: PipelineNode as NodeTypes[string],
@@ -228,6 +228,13 @@ export default function App() {
   /** Pipeline-level default chart config — read from default_chart: in pipeline.yaml */
   const [defaultChartConfig, setDefaultChartConfig] = useState<ChartConfig | undefined>(undefined)
 
+  /** Shadow specs keyed by node_id — loaded from pipeline.shadow.yaml */
+  const [shadowSpecs, setShadowSpecs] = useState<Record<string, ShadowNodeSpec>>({})
+  /** Per-node shadow breach status from the last session run */
+  const [shadowBreachMap, setShadowBreachMap] = useState<Record<string, boolean>>({})
+  /** Absolute path to the shadow YAML file, derived when pipeline is loaded */
+  const shadowYamlPathRef = useRef<string | null>(null)
+
   // Variables — load variables.yaml content whenever workspace changes
   useEffect(() => {
     if (!workspace) { setVariablesYaml(null); return }
@@ -385,6 +392,25 @@ export default function App() {
           startSessionWebSocket(session.session_id)
         }
       }).catch(() => {})
+
+      // Load shadow spec YAML
+      shadowYamlPathRef.current = fullPath
+      fetchShadowYaml(fullPath)
+        .then(({ content, exists }) => {
+          if (!exists || !content.trim()) { setShadowSpecs({}); return }
+          try {
+            const parsed = yaml.load(content) as Record<string, unknown> | null
+            if (parsed && typeof parsed === 'object') {
+              // Each key is a node_id → ShadowNodeSpec
+              const specs: Record<string, ShadowNodeSpec> = {}
+              for (const [id, raw] of Object.entries(parsed)) {
+                specs[id] = { ...(raw as ShadowNodeSpec), id }
+              }
+              setShadowSpecs(specs)
+            }
+          } catch { setShadowSpecs({}) }
+        })
+        .catch(() => setShadowSpecs({}))
       const templatesRelDir = (parsed?.templates as Record<string, unknown>)?.dir as string ?? 'templates'
       const templatesDir = `${pipelineDir}/${templatesRelDir}`.replace(/\\/g, '/')
 
@@ -554,6 +580,41 @@ export default function App() {
     if (!pipelineFilePath) return
     const pipelineObj = buildPipelineObject(nodes, edges, config)
     await writeWorkspaceFile(pipelineFilePath, yaml.dump(pipelineObj, { lineWidth: 120 })).catch((e) => alert(`Failed to save: ${e}`))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shadow spec save / fetch diff
+  // ---------------------------------------------------------------------------
+
+  async function handleSaveShadowSpec(nodeId: string, spec: ShadowNodeSpec | null) {
+    if (!shadowYamlPathRef.current) return
+    const next = { ...shadowSpecs }
+    if (spec === null) {
+      delete next[nodeId]
+    } else {
+      next[nodeId] = { ...spec, id: nodeId }
+    }
+    // Serialise: strip id field per node since key already encodes it
+    const obj: Record<string, unknown> = {}
+    for (const [id, s] of Object.entries(next)) {
+      const { id: _id, ...rest } = s
+      void _id
+      // Strip undefined/null fields
+      obj[id] = Object.fromEntries(Object.entries(rest).filter(([, v]) => v != null && !(Array.isArray(v) && v.length === 0)))
+    }
+    const content = Object.keys(obj).length > 0 ? yaml.dump(obj, { lineWidth: 120 }) : ''
+    await writeShadowYaml(shadowYamlPathRef.current, content)
+    setShadowSpecs(next)
+    // Update has_shadow badge on the node
+    setNodes((nds) => nds.map((n) => {
+      if (n.id !== nodeId) return n
+      return { ...n, data: { ...n.data, has_shadow: spec !== null || undefined, shadow_breach: spec === null ? undefined : n.data.shadow_breach } }
+    }))
+  }
+
+  async function handleFetchShadowResult(nodeId: string): Promise<ShadowDiffResult> {
+    if (!activeSession) throw new Error('No active session — run the pipeline first.')
+    return fetchShadowResult(activeSession.session_id, nodeId, 100)
   }
 
   // ---------------------------------------------------------------------------
@@ -820,6 +881,21 @@ export default function App() {
           paramsAtRun.current = snapshot
           return nds.map((n) => ({ ...n, data: { ...n.data, stale: false } }))
         })
+        // Fetch shadow breach status for all shadow nodes that ran
+        const shadowNodeIds = Object.keys(shadowSpecs).filter((id) => statusMap[id]?.status === 'completed')
+        if (shadowNodeIds.length > 0) {
+          Promise.allSettled(
+            shadowNodeIds.map((id) => fetchShadowResult(session.session_id, id, 1))
+          ).then((results) => {
+            const breachMap: Record<string, boolean> = {}
+            results.forEach((r, i) => {
+              if (r.status === 'fulfilled') {
+                breachMap[shadowNodeIds[i]] = r.value.status === 'breach'
+              }
+            })
+            setShadowBreachMap((prev) => ({ ...prev, ...breachMap }))
+          }).catch(() => {/* best-effort */})
+        }
       }
     }
   }
@@ -1022,7 +1098,7 @@ export default function App() {
     } catch { return [] }
   }, [variablesYaml])
 
-  /** Nodes augmented with var_error flag for missing ${variables.*} references */
+  /** Nodes augmented with var_error, has_shadow, shadow_breach flags */
   const nodesForCanvas = useMemo(() => {
     const varSet = new Set(variableNames)
     const VAR_REF = /\$\{variables\.([^}]+)\}/g
@@ -1035,10 +1111,12 @@ export default function App() {
         }
         if (hasError) break
       }
-      if (hasError === !!n.data.var_error) return n
-      return { ...n, data: { ...n.data, var_error: hasError || undefined } }
+      const hasShadow = !!shadowSpecs[n.id]
+      const shadowBreach = !!shadowBreachMap[n.id]
+      if (hasError === !!n.data.var_error && hasShadow === !!n.data.has_shadow && shadowBreach === !!n.data.shadow_breach) return n
+      return { ...n, data: { ...n.data, var_error: hasError || undefined, has_shadow: hasShadow || undefined, shadow_breach: shadowBreach || undefined } }
     })
-  }, [nodes, variableNames])
+  }, [nodes, variableNames, shadowSpecs, shadowBreachMap])
 
   // ---------------------------------------------------------------------------
   // Selected node helpers
@@ -1146,6 +1224,9 @@ export default function App() {
           chartConfig={selectedNode.data.chart_config as ChartConfig | undefined ?? defaultChartConfig}
           onSaveChartForNode={pipelineFilePath ? handleSaveChartForNode : undefined}
           onSaveChartAsDefault={pipelineFilePath ? handleSaveChartAsDefault : undefined}
+          shadowSpec={pipelineFilePath ? shadowSpecs[selectedNode.id] : undefined}
+          onSaveShadowSpec={pipelineFilePath ? handleSaveShadowSpec : undefined}
+          onFetchShadowResult={activeSession ? handleFetchShadowResult : undefined}
           bottomOffset={activeSession ? 224 : activeRun ? 44 : 0}
         />
       )}

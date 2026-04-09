@@ -299,6 +299,54 @@ export interface SSASMember {
 }
 
 // ---------------------------------------------------------------------------
+// Shadow / sidecar node types
+// ---------------------------------------------------------------------------
+
+export interface ShadowToleranceSpec {
+  absolute?: number
+  relative?: number
+  pct_rows_allowed?: number
+}
+
+export interface ShadowNodeSpec {
+  id?: string
+  type: string
+  inputs?: string[]
+  output?: string
+  template?: string
+  params?: Record<string, unknown>
+  key_columns: string[]
+  tolerances?: Record<string, ShadowToleranceSpec>
+  default_tolerance?: ShadowToleranceSpec
+  on_breach?: 'warn' | 'fail_node' | 'fail_pipeline'
+  compare_row_count?: boolean
+  row_count_tolerance_pct?: number
+  preprocess_sql?: string
+  postprocess_sql?: string
+}
+
+export interface ShadowSummary {
+  node_id: string
+  status: string
+  total_primary: number
+  total_shadow: number
+  matched: number
+  primary_only: number
+  shadow_only: number
+  breach_count: number
+  within_tolerance_count: number
+  row_count_breached: boolean
+  [key: string]: unknown  // max_diff_{col} fields
+}
+
+export interface ShadowDiffResult {
+  status: 'pass' | 'warn' | 'breach' | 'not_run'
+  summary: ShadowSummary | null
+  diff_columns: string[]
+  diff_sample: unknown[][]
+}
+
+// ---------------------------------------------------------------------------
 // Variable declarations (from pipeline.yaml variable_declarations block)
 export interface VariableDeclaration {
   name: string

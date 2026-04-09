@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import type { BuilderNodeData, ColumnSchema, DQCheck, DQCheckType, LineageRow, NodePreviewResponse, NodeTypeSchema, PandasTransformEntry, ParamSchema } from '../types'
+import type { BuilderNodeData, ColumnSchema, DQCheck, DQCheckType, LineageRow, NodePreviewResponse, NodeTypeSchema, PandasTransformEntry, ParamSchema, ShadowDiffResult, ShadowNodeSpec } from '../types'
 import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, workspaceFileExists, writeWorkspaceFile } from '../api/client'
 import * as yaml from 'js-yaml'
 import SqlEditor from './SqlEditor'
@@ -53,6 +53,12 @@ interface NodeConfigPanelProps {
   onSaveChartForNode?: (nodeId: string, config: ChartConfig) => void
   /** Called when the user saves chart config as the pipeline default. */
   onSaveChartAsDefault?: (config: ChartConfig) => void
+  /** Shadow spec for this node from pipeline.shadow.yaml — undefined if none exists */
+  shadowSpec?: ShadowNodeSpec
+  /** Called when the user saves or deletes a shadow spec; null = delete */
+  onSaveShadowSpec?: (nodeId: string, spec: ShadowNodeSpec | null) => void
+  /** Called when user requests diff results — fetches from last session run */
+  onFetchShadowResult?: (nodeId: string) => Promise<ShadowDiffResult>
   /** Height in px of any fixed ribbon at the bottom of the viewport (SessionPanel / RunPanel).
    *  The panel height is reduced by this amount so its footer is never hidden behind the ribbon. */
   bottomOffset?: number
@@ -87,6 +93,9 @@ export default function NodeConfigPanel({
   chartConfig,
   onSaveChartForNode,
   onSaveChartAsDefault,
+  shadowSpec,
+  onSaveShadowSpec,
+  onFetchShadowResult,
   bottomOffset = 0,
 }: NodeConfigPanelProps) {
   const [params, setParams] = useState<Record<string, unknown>>(data.params ?? {})
@@ -220,6 +229,14 @@ export default function NodeConfigPanel({
   const [templateSaved, setTemplateSaved] = useState(false)
 
   const [templateConflict, setTemplateConflict] = useState<string | null>(null)
+
+  // Shadow config + diff
+  const [showShadowConfig, setShowShadowConfig] = useState(false)
+  const [shadowDraft, setShadowDraft] = useState<Partial<ShadowNodeSpec> & { _key_cols_str?: string } | null>(null)
+  const [shadowSaving, setShadowSaving] = useState(false)
+  const [shadowSaveError, setShadowSaveError] = useState<string | null>(null)
+  const [shadowDiffResult, setShadowDiffResult] = useState<ShadowDiffResult | null>(null)
+  const [shadowDiffLoading, setShadowDiffLoading] = useState(false)
 
   async function handleSaveAsTemplate(force = false) {
     if (!workspace || !templateName.trim()) return
@@ -366,6 +383,60 @@ export default function NodeConfigPanel({
       setError(String(e))
     } finally {
       setLineageLoading(false)
+    }
+  }
+
+  function startEditShadow() {
+    if (shadowSpec) {
+      setShadowDraft({ ...shadowSpec, _key_cols_str: shadowSpec.key_columns.join(', ') })
+    } else {
+      setShadowDraft({ type: data.node_type, key_columns: [], on_breach: 'warn', _key_cols_str: '' })
+    }
+    setShowShadowConfig(true)
+    setShadowSaveError(null)
+  }
+
+  async function handleSaveShadow() {
+    if (!shadowDraft || !onSaveShadowSpec) return
+    const keyCols = (shadowDraft._key_cols_str ?? '')
+      .split(',').map((s) => s.trim()).filter(Boolean)
+    if (!shadowDraft.type?.trim() || keyCols.length === 0) {
+      setShadowSaveError('Node type and at least one key column are required.')
+      return
+    }
+    setShadowSaving(true)
+    setShadowSaveError(null)
+    try {
+      const { _key_cols_str: _ignored, ...rest } = shadowDraft
+      void _ignored
+      await onSaveShadowSpec(nodeId, { ...rest, key_columns: keyCols } as ShadowNodeSpec)
+      setShowShadowConfig(false)
+    } catch (e) {
+      setShadowSaveError(String(e))
+    } finally {
+      setShadowSaving(false)
+    }
+  }
+
+  async function handleDeleteShadow() {
+    if (!onSaveShadowSpec) return
+    await onSaveShadowSpec(nodeId, null)
+    setShowShadowConfig(false)
+    setShadowDiffResult(null)
+  }
+
+  async function handleFetchShadowDiff() {
+    if (!onFetchShadowResult) return
+    setShadowDiffLoading(true)
+    setShadowDiffResult(null)
+    setError(null)
+    try {
+      const result = await onFetchShadowResult(nodeId)
+      setShadowDiffResult(result)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setShadowDiffLoading(false)
     }
   }
 
@@ -618,6 +689,31 @@ export default function NodeConfigPanel({
           />
         )}
 
+        {/* Shadow config */}
+        {onSaveShadowSpec && (
+          <ShadowConfigSection
+            hasShadow={!!shadowSpec}
+            shadowSpec={shadowSpec}
+            showConfig={showShadowConfig}
+            draft={shadowDraft}
+            saving={shadowSaving}
+            saveError={shadowSaveError}
+            onStart={startEditShadow}
+            onCancel={() => setShowShadowConfig(false)}
+            onSave={handleSaveShadow}
+            onDelete={handleDeleteShadow}
+            onChangeDraft={(patch) => setShadowDraft((d) => d ? { ...d, ...patch } : d)}
+          />
+        )}
+
+        {/* Shadow diff results */}
+        {shadowDiffResult && shadowDiffResult.status !== 'not_run' && (
+          <ShadowDiffSection result={shadowDiffResult} />
+        )}
+        {shadowDiffResult?.status === 'not_run' && (
+          <div style={styles.aiNote}>⊛ No shadow diff recorded for this node yet.</div>
+        )}
+
         {/* AI explanation */}
         {aiExplanation && (
           <div style={styles.aiNote}>
@@ -646,6 +742,25 @@ export default function NodeConfigPanel({
         {onFetchLineage && (
           <button onClick={handleFetchLineage} disabled={lineageLoading} style={styles.lineageBtn}>
             {lineageLoading ? '…' : '⋈ Lineage'}
+          </button>
+        )}
+        {onSaveShadowSpec && (
+          <button
+            onClick={startEditShadow}
+            style={shadowSpec ? styles.shadowActiveBtn : styles.shadowBtn}
+            title={shadowSpec ? 'Edit shadow node config' : 'Add shadow node for this output'}
+          >
+            ⊛ Shadow
+          </button>
+        )}
+        {onFetchShadowResult && shadowSpec && (
+          <button
+            onClick={handleFetchShadowDiff}
+            disabled={shadowDiffLoading}
+            style={styles.shadowDiffBtn}
+            title="Load diff results from last session run"
+          >
+            {shadowDiffLoading ? '…' : '⊛ Diff'}
           </button>
         )}
         {workspace && (
@@ -1086,6 +1201,305 @@ const dqStyles: Record<string, React.CSSProperties> = {
 }
 
 // ---------------------------------------------------------------------------
+// ShadowConfigSection — inline shadow spec editor
+// ---------------------------------------------------------------------------
+
+const SHADOW_NODE_TYPES = [
+  'pandas_transform', 'sql_transform', 'sql_exec', 'load_duckdb',
+  'load_odbc', 'load_ssas', 'load_file', 'load_rest_api', 'load_internal_api',
+]
+
+function ShadowConfigSection({
+  hasShadow,
+  shadowSpec,
+  showConfig,
+  draft,
+  saving,
+  saveError,
+  onStart,
+  onCancel,
+  onSave,
+  onDelete,
+  onChangeDraft,
+}: {
+  hasShadow: boolean
+  shadowSpec?: ShadowNodeSpec
+  showConfig: boolean
+  draft: (Partial<ShadowNodeSpec> & { _key_cols_str?: string }) | null
+  saving: boolean
+  saveError: string | null
+  onStart: () => void
+  onCancel: () => void
+  onSave: () => void
+  onDelete: () => void
+  onChangeDraft: (patch: Partial<ShadowNodeSpec> & { _key_cols_str?: string }) => void
+}) {
+  return (
+    <div style={styles.section}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={styles.sectionLabel}>Shadow node</span>
+        {hasShadow && (
+          <span style={shadowStyles.activeBadge}>active</span>
+        )}
+      </div>
+
+      {hasShadow && !showConfig && shadowSpec && (
+        <div style={shadowStyles.specSummary}>
+          <div style={shadowStyles.specRow}>
+            <span style={shadowStyles.specKey}>type</span>
+            <span style={shadowStyles.specVal}>{shadowSpec.type}</span>
+          </div>
+          <div style={shadowStyles.specRow}>
+            <span style={shadowStyles.specKey}>key cols</span>
+            <span style={shadowStyles.specVal}>{shadowSpec.key_columns.join(', ')}</span>
+          </div>
+          <div style={shadowStyles.specRow}>
+            <span style={shadowStyles.specKey}>on breach</span>
+            <span style={shadowStyles.specVal}>{shadowSpec.on_breach ?? 'warn'}</span>
+          </div>
+          {shadowSpec.preprocess_sql && (
+            <div style={shadowStyles.specRow}>
+              <span style={shadowStyles.specKey}>pre-SQL</span>
+              <span style={{ ...shadowStyles.specVal, color: '#a6adc8' }}>set</span>
+            </div>
+          )}
+          {shadowSpec.postprocess_sql && (
+            <div style={shadowStyles.specRow}>
+              <span style={shadowStyles.specKey}>post-SQL</span>
+              <span style={{ ...shadowStyles.specVal, color: '#a6adc8' }}>set</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!hasShadow && !showConfig && (
+        <button style={shadowStyles.addBtn} onClick={onStart}>+ Add shadow node</button>
+      )}
+
+      {showConfig && draft && (
+        <div style={shadowStyles.form}>
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>Node type *</label>
+            <select
+              value={draft.type ?? ''}
+              onChange={(e) => onChangeDraft({ type: e.target.value })}
+              style={shadowStyles.select}
+            >
+              <option value="">— select —</option>
+              {SHADOW_NODE_TYPES.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>Key columns * <span style={shadowStyles.hint}>(comma-separated)</span></label>
+            <input
+              style={shadowStyles.input}
+              value={draft._key_cols_str ?? ''}
+              onChange={(e) => onChangeDraft({ _key_cols_str: e.target.value })}
+              placeholder="e.g. id, date"
+            />
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>On breach</label>
+            <select
+              value={draft.on_breach ?? 'warn'}
+              onChange={(e) => onChangeDraft({ on_breach: e.target.value as ShadowNodeSpec['on_breach'] })}
+              style={shadowStyles.select}
+            >
+              <option value="warn">warn</option>
+              <option value="fail_node">fail_node</option>
+              <option value="fail_pipeline">fail_pipeline</option>
+            </select>
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>
+              Default tolerance — absolute
+              <span style={shadowStyles.hint}> (numeric diff threshold)</span>
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={0.001}
+              style={shadowStyles.input}
+              value={draft.default_tolerance?.absolute ?? ''}
+              onChange={(e) => onChangeDraft({ default_tolerance: { ...draft.default_tolerance, absolute: e.target.value ? Number(e.target.value) : undefined } })}
+              placeholder="e.g. 0.01"
+            />
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>
+              Default tolerance — relative
+              <span style={shadowStyles.hint}> (fraction, e.g. 0.001 = 0.1%)</span>
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={0.0001}
+              style={shadowStyles.input}
+              value={draft.default_tolerance?.relative ?? ''}
+              onChange={(e) => onChangeDraft({ default_tolerance: { ...draft.default_tolerance, relative: e.target.value ? Number(e.target.value) : undefined } })}
+              placeholder="e.g. 0.001"
+            />
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>Pre-process SQL <span style={shadowStyles.hint}>(single-input only; input table = "input")</span></label>
+            <textarea
+              style={shadowStyles.textarea}
+              rows={3}
+              value={draft.preprocess_sql ?? ''}
+              onChange={(e) => onChangeDraft({ preprocess_sql: e.target.value || undefined })}
+              placeholder="SELECT * FROM input WHERE ..."
+            />
+          </div>
+
+          <div style={shadowStyles.formRow}>
+            <label style={shadowStyles.formLabel}>Post-process SQL <span style={shadowStyles.hint}>(output table = "output")</span></label>
+            <textarea
+              style={shadowStyles.textarea}
+              rows={3}
+              value={draft.postprocess_sql ?? ''}
+              onChange={(e) => onChangeDraft({ postprocess_sql: e.target.value || undefined })}
+              placeholder="SELECT * FROM output WHERE ..."
+            />
+          </div>
+
+          {saveError && <div style={styles.errorNote}>{saveError}</div>}
+
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={onSave}
+              disabled={saving}
+              style={{ ...styles.runBtn, flex: 1, opacity: saving ? 0.5 : 1 }}
+            >
+              {saving ? 'Saving…' : 'Save shadow'}
+            </button>
+            <button onClick={onCancel} style={styles.cancelBtn}>Cancel</button>
+            {hasShadow && (
+              <button onClick={onDelete} style={shadowStyles.deleteBtn}>Remove</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ShadowDiffSection — displays diff results from last run
+// ---------------------------------------------------------------------------
+
+function ShadowDiffSection({ result }: { result: ShadowDiffResult }) {
+  const { status, summary, diff_columns, diff_sample } = result
+
+  const statusColor = status === 'pass' ? '#a6e3a1'
+    : status === 'breach' ? '#f38ba8'
+    : status === 'warn' ? '#f9e2af'
+    : '#89b4fa'
+
+  // Extract max_diff_* fields from summary
+  const maxDiffs: Array<{ col: string; val: unknown }> = summary
+    ? Object.entries(summary)
+        .filter(([k]) => k.startsWith('max_diff_'))
+        .map(([k, v]) => ({ col: k.replace('max_diff_', ''), val: v }))
+    : []
+
+  return (
+    <div style={styles.section}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={styles.sectionLabel}>Shadow diff results</span>
+        <span style={{ ...shadowStyles.activeBadge, background: statusColor + '33', color: statusColor, border: `1px solid ${statusColor}55` }}>
+          {status}
+        </span>
+      </div>
+
+      {summary && (
+        <div style={shadowStyles.summaryGrid}>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>primary rows</span>
+            <span style={shadowStyles.summaryVal}>{summary.total_primary.toLocaleString()}</span>
+          </div>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>shadow rows</span>
+            <span style={shadowStyles.summaryVal}>{summary.total_shadow.toLocaleString()}</span>
+          </div>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>matched</span>
+            <span style={shadowStyles.summaryVal}>{summary.matched.toLocaleString()}</span>
+          </div>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>breaches</span>
+            <span style={{ ...shadowStyles.summaryVal, color: summary.breach_count > 0 ? '#f38ba8' : '#a6e3a1' }}>
+              {summary.breach_count.toLocaleString()}
+            </span>
+          </div>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>primary only</span>
+            <span style={shadowStyles.summaryVal}>{summary.primary_only.toLocaleString()}</span>
+          </div>
+          <div style={shadowStyles.summaryCell}>
+            <span style={shadowStyles.summaryKey}>shadow only</span>
+            <span style={shadowStyles.summaryVal}>{summary.shadow_only.toLocaleString()}</span>
+          </div>
+          {summary.row_count_breached && (
+            <div style={{ ...shadowStyles.summaryCell, gridColumn: '1 / -1' }}>
+              <span style={{ fontSize: 10, color: '#f38ba8', fontWeight: 600 }}>⚠ Row count breach</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {maxDiffs.length > 0 && (
+        <div style={shadowStyles.maxDiffList}>
+          <div style={shadowStyles.maxDiffHeader}>Max column diffs</div>
+          {maxDiffs.map(({ col, val }) => (
+            <div key={col} style={shadowStyles.maxDiffRow}>
+              <span style={shadowStyles.specKey}>{col}</span>
+              <span style={shadowStyles.specVal}>{String(val)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {diff_columns.length > 0 && diff_sample.length > 0 && (
+        <>
+          <div style={{ fontSize: 10, color: '#6c7086', marginTop: 4 }}>
+            Breach sample ({diff_sample.length} rows)
+          </div>
+          <div style={{ ...styles.previewWrap, maxHeight: 180 }}>
+            <table style={styles.previewTable}>
+              <thead>
+                <tr>
+                  {diff_columns.map((col) => (
+                    <th key={col} style={styles.previewTh}>{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {diff_sample.map((row, i) => (
+                  <tr key={i} style={i % 2 === 1 ? styles.previewRowAlt : undefined}>
+                    {(row as unknown[]).map((cell, j) => (
+                      <td key={j} style={diff_columns[j] === '_diff_status' ? { ...styles.previewTd, color: cell === 'breach' ? '#f38ba8' : cell === 'within_tolerance' ? '#f9e2af' : '#a6adc8' } : styles.previewTd}>
+                        {cell == null ? <span style={styles.nullCell}>null</span> : String(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
 
@@ -1203,4 +1617,31 @@ const styles: Record<string, React.CSSProperties> = {
   },
   acVarName: { color: '#cdd6f4', fontFamily: 'monospace' },
   acHint: { fontSize: 10, color: '#6c7086' },
+  shadowBtn: { flex: '0 0 auto', background: '#cba6f722', border: '1px solid #cba6f744', color: '#cba6f7', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
+  shadowActiveBtn: { flex: '0 0 auto', background: '#cba6f733', border: '1px solid #cba6f766', color: '#cba6f7', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
+  shadowDiffBtn: { flex: '0 0 auto', background: '#f38ba822', border: '1px solid #f38ba844', color: '#f38ba8', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
+}
+
+const shadowStyles: Record<string, React.CSSProperties> = {
+  activeBadge: { fontSize: 9, background: '#cba6f733', color: '#cba6f7', border: '1px solid #cba6f755', borderRadius: 8, padding: '1px 5px', fontWeight: 700 },
+  specSummary: { background: '#181825', border: '1px solid #313244', borderRadius: 5, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 3 },
+  specRow: { display: 'flex', gap: 8, alignItems: 'baseline' },
+  specKey: { fontSize: 9, fontWeight: 700, color: '#6c7086', textTransform: 'uppercase' as const, letterSpacing: '0.04em', flexShrink: 0, width: 60 },
+  specVal: { fontSize: 10, color: '#cdd6f4', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  addBtn: { fontSize: 10, background: 'none', border: '1px dashed #cba6f755', color: '#cba6f7', borderRadius: 4, padding: '3px 8px', cursor: 'pointer', alignSelf: 'flex-start' as const },
+  form: { display: 'flex', flexDirection: 'column' as const, gap: 6, background: '#181825', border: '1px solid #313244', borderRadius: 6, padding: '10px' },
+  formRow: { display: 'flex', flexDirection: 'column' as const, gap: 2 },
+  formLabel: { fontSize: 10, fontWeight: 600, color: '#6c7086', letterSpacing: '0.04em', textTransform: 'uppercase' as const },
+  hint: { fontSize: 9, color: '#45475a', fontWeight: 400, textTransform: 'none' as const, letterSpacing: 0 },
+  input: { background: '#11111b', border: '1px solid #313244', borderRadius: 4, color: '#cdd6f4', fontSize: 11, padding: '4px 7px', outline: 'none', width: '100%', boxSizing: 'border-box' as const },
+  select: { background: '#11111b', border: '1px solid #313244', borderRadius: 4, color: '#cdd6f4', fontSize: 11, padding: '4px 7px', outline: 'none', width: '100%' },
+  textarea: { background: '#11111b', border: '1px solid #313244', borderRadius: 4, color: '#cdd6f4', fontSize: 11, padding: '4px 7px', outline: 'none', width: '100%', boxSizing: 'border-box' as const, fontFamily: 'monospace', resize: 'vertical' as const },
+  deleteBtn: { flex: '0 0 auto', background: '#f38ba822', border: '1px solid #f38ba844', color: '#f38ba8', borderRadius: 4, padding: '1px 8px', cursor: 'pointer', fontSize: 10 },
+  summaryGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4, background: '#181825', border: '1px solid #313244', borderRadius: 5, padding: '6px 8px' },
+  summaryCell: { display: 'flex', flexDirection: 'column' as const, gap: 1 },
+  summaryKey: { fontSize: 9, color: '#6c7086', fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
+  summaryVal: { fontSize: 12, color: '#cdd6f4', fontWeight: 700 },
+  maxDiffList: { background: '#181825', border: '1px solid #313244', borderRadius: 5, padding: '6px 8px', display: 'flex', flexDirection: 'column' as const, gap: 3 },
+  maxDiffHeader: { fontSize: 9, fontWeight: 700, color: '#6c7086', textTransform: 'uppercase' as const, letterSpacing: '0.04em', marginBottom: 2 },
+  maxDiffRow: { display: 'flex', gap: 8, alignItems: 'baseline' },
 }

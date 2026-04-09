@@ -109,4 +109,7 @@ pipeline_service/
 
 ```bash
 uvicorn pipeline_service.api:app --host 0.0.0.0 --port 8000 --reload
+
+../../.venv/Scripts/uvicorn pipeline_service.api:app --host 0.0.0.0 --port 8000 --reload
+
 ```

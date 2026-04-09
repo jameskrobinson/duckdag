@@ -15,7 +15,7 @@ from pipeline_core.lineage import (
     write_lineage_rows,
 )
 from pipeline_core.planner import ExecutionPlan
-from pipeline_core.resolver.models import NodeSpec, PipelineSpec
+from pipeline_core.resolver.models import NodeSpec, PipelineSpec, ShadowNodeSpec
 from pipeline_core.session import Session
 from pipeline_core.transforms.loader import load_transform
 
@@ -935,6 +935,57 @@ def _write_node_lineage(
 
 
 # ---------------------------------------------------------------------------
+# Shadow execution helper
+# ---------------------------------------------------------------------------
+
+def _run_shadow_step(
+    node_id: str,
+    shadow_spec: ShadowNodeSpec,
+    spec: PipelineSpec,
+    session: Session,
+    store: IntermediateStore,
+    templates_dir: Path | None,
+) -> None:
+    """Run shadow execution for a single node, handling on_breach semantics.
+
+    Imported lazily to avoid circular imports.  Errors are caught and logged
+    (or re-raised) according to shadow_spec.on_breach:
+      - 'fail_pipeline' → re-raises ShadowBreachError (aborts the run)
+      - 'fail_node'     → logs but does NOT re-raise (primary output is kept)
+      - 'warn'          → logs a warning only
+    """
+    import logging as _logging
+    _slog = _logging.getLogger(__name__)
+
+    from pipeline_core.executor.shadow_executor import (  # noqa: PLC0415
+        ShadowBreachError,
+        execute_shadow_step,
+    )
+
+    primary_df = store.get(shadow_spec.output or node_id) if (shadow_spec.output or node_id) else None
+    if primary_df is None:
+        return
+
+    try:
+        execute_shadow_step(
+            primary_node_id=node_id,
+            shadow_spec=shadow_spec,
+            primary_output_df=store.get(shadow_spec.output or node_id),
+            spec=spec,
+            session=session,
+            store=store,
+            templates_dir=templates_dir,
+        )
+    except ShadowBreachError:
+        if shadow_spec.on_breach == "fail_pipeline":
+            raise
+        # fail_node or warn — don't abort the pipeline
+        _slog.warning("Shadow breach for node '%s' (on_breach='%s')", node_id, shadow_spec.on_breach)
+    except Exception as exc:
+        _slog.error("Shadow execution failed for node '%s': %s", node_id, exc, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -943,6 +994,7 @@ def execute_step(
     spec: PipelineSpec,
     session: Session,
     store: IntermediateStore,
+    shadow_specs: dict[str, ShadowNodeSpec] | None = None,
 ) -> None:
     """Execute a single step from an ExecutionPlan.
 
@@ -954,6 +1006,9 @@ def execute_step(
         spec: The resolved pipeline specification.
         session: An open :class:`~pipeline_core.session.Session`.
         store: The intermediate store for DataFrames.
+        shadow_specs: Optional mapping of node_id → ShadowNodeSpec.  When
+            provided and ``spec.shadow_mode`` is True, shadow execution runs
+            after each primary node completes.
     """
     templates_dir: Path | None = Path(spec.templates.dir) if spec.templates else None
     node = step.node
@@ -995,12 +1050,17 @@ def execute_step(
         except Exception:
             pass  # Never let DQ checks break execution
 
+    # Shadow execution — runs after DQ, only when shadow_mode is enabled
+    if spec.shadow_mode and shadow_specs and node.id in shadow_specs and node.output is not None:
+        _run_shadow_step(node.id, shadow_specs[node.id], spec, session, store, templates_dir)
+
 
 def execute_plan(
     plan: ExecutionPlan,
     spec: PipelineSpec,
     session: Session,
     store: IntermediateStore,
+    shadow_specs: dict[str, ShadowNodeSpec] | None = None,
 ) -> None:
     """Execute all pending steps in an ExecutionPlan.
 
@@ -1012,6 +1072,9 @@ def execute_plan(
         spec: The resolved pipeline specification.
         session: An open :class:`~pipeline_core.session.Session` (use as context manager).
         store: An :class:`~pipeline_core.intermediate.IntermediateStore` instance.
+        shadow_specs: Optional mapping of node_id → ShadowNodeSpec.  When
+            provided and ``spec.shadow_mode`` is True, shadow execution runs
+            after each primary node completes.
     """
     templates_dir: Path | None = Path(spec.templates.dir) if spec.templates else None
     init_lineage_table(session.conn)
@@ -1053,3 +1116,7 @@ def execute_plan(
                 raise
             except Exception:
                 pass
+
+        # Shadow execution
+        if spec.shadow_mode and shadow_specs and node.id in shadow_specs and node.output is not None:
+            _run_shadow_step(node.id, shadow_specs[node.id], spec, session, store, templates_dir)
