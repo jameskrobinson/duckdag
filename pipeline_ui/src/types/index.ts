@@ -30,6 +30,7 @@ export interface NodeTypeSchema {
   reads_store_inputs: boolean
   fixed_params: ParamSchema[]
   accepts_template_params: boolean
+  tags?: string[]
 }
 
 // Inspect response from POST /node-types/inspect
@@ -206,6 +207,50 @@ export interface DQCheck {
   max_value?: number
 }
 
+// ---------------------------------------------------------------------------
+// Palette (unified Sources / Transforms / Sinks endpoint)
+// ---------------------------------------------------------------------------
+
+export interface PaletteConfig {
+  id: string
+  label: string
+  description: string
+  origin: 'builtin' | 'workspace' | 'pipeline'
+  params: Record<string, unknown>
+  template_file?: string
+  template_path?: string
+  sql_preview?: string
+  tags?: string[]
+}
+
+export interface PaletteFunction {
+  kind: 'source' | 'transform' | 'sink'
+  node_type: string
+  label: string
+  description: string
+  tags?: string[]
+  origin: 'builtin' | 'workspace' | 'pipeline'
+  fixed_params: ParamSchema[]
+  needs_template: boolean
+  accepts_template_params: boolean
+  /** Only set for pandas transform functions */
+  full_path?: string
+  configs: PaletteConfig[]
+}
+
+export interface PaletteGroup {
+  name: string
+  label: string
+  origin: 'builtin' | 'workspace' | 'pipeline'
+  functions: PaletteFunction[]
+}
+
+export interface PaletteResponse {
+  sources: PaletteFunction[]
+  transforms: PaletteGroup[]
+  sinks: PaletteFunction[]
+}
+
 // Variable declarations (from pipeline.yaml variable_declarations block)
 export interface VariableDeclaration {
   name: string
@@ -252,4 +297,6 @@ export interface NodeTemplate {
   sql_preview?: string
   /** User-defined tags for cross-type browsing and search */
   tags?: string[]
+  /** Declared palette category for SQL templates (from -- category: front-matter) */
+  category?: string
 }

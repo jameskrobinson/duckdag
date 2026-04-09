@@ -370,9 +370,9 @@ export default function NodeConfigPanel({
   const acceptsTemplateParams = resolvedPandasEntry ? false : (nodeTypeSchema?.accepts_template_params ?? false)
   const producesOutput = nodeTypeSchema?.produces_output ?? true
 
-  // For param-based SQL nodes (load_duckdb), hide 'query' from the regular param fields
-  // since it is rendered as a full SQL editor instead.
-  const visibleFixedParams = isSqlParamNode
+  // For load_duckdb (and any future SQL_PARAM_NODE_TYPES), always hide 'query' from
+  // the regular param fields — it is shown in the SQL editor whether param-based or template-based.
+  const visibleFixedParams = SQL_PARAM_NODE_TYPES.has(data.node_type)
     ? fixedParams.filter((p) => p.name !== 'query')
     : fixedParams
 

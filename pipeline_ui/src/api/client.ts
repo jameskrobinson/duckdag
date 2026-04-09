@@ -5,8 +5,8 @@ import type {
   InspectResponse,
   NodePreviewResponse,
   NodeRunResponse,
-  NodeTemplate,
   NodeTypeSchema,
+  PaletteResponse,
   PandasTransformCategory,
   RunResponse,
   SessionNodeResponse,
@@ -330,12 +330,22 @@ export function writeSchemaFile(
 }
 
 // ---------------------------------------------------------------------------
-// Templates
+// Palette
 // ---------------------------------------------------------------------------
 
-export function fetchTemplates(workspace?: string): Promise<NodeTemplate[]> {
+export function fetchPalette(workspace?: string): Promise<PaletteResponse> {
   const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
-  return request<NodeTemplate[]>(`/templates${q}`)
+  return request<PaletteResponse>(`/palette${q}`)
+}
+
+export interface PaletteTagEntry {
+  tag: string
+  count: number
+}
+
+export function fetchPaletteTags(workspace?: string): Promise<PaletteTagEntry[]> {
+  const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+  return request<PaletteTagEntry[]>(`/palette/tags${q}`)
 }
 
 export function suggestConfig(

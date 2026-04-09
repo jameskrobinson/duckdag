@@ -1,0 +1,5 @@
+env.yaml
+runs/
+__pycache__/
+*.pyc
+*.duckdb

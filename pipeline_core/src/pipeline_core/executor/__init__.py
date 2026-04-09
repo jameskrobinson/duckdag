@@ -216,6 +216,7 @@ def _handle_load_duckdb(
         raise ValueError(f"Node '{node.id}' (load_duckdb): must specify 'table' or 'query'")
     else:
         sql = query if query else f'SELECT * FROM "{table}"'
+
     if path:
         # Attach the external file read-only, query it, then detach.
         import duckdb

@@ -41,6 +41,9 @@ class NodeTypeSchema(BaseModel):
     """True if additional arbitrary params are forwarded to the Jinja2 template
     as context. The builder should offer a free-form key/value editor for these."""
 
+    tags: list[str] = []
+    """Searchable tags for palette browsing (e.g. ['sql', 'load', 'database'])."""
+
 
 # ---------------------------------------------------------------------------
 # Definitions — one per NodeType in pipeline_core.resolver.models
@@ -61,6 +64,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=False,
         fixed_params=[],
         accepts_template_params=True,
+        tags=["sql", "duckdb", "export", "ddl"],
     ),
     NodeTypeSchema(
         type="sql_transform",
@@ -76,6 +80,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=True,
         fixed_params=[],
         accepts_template_params=True,
+        tags=["sql", "duckdb", "transform"],
     ),
     NodeTypeSchema(
         type="pandas_transform",
@@ -102,6 +107,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["python", "pandas", "transform"],
     ),
     NodeTypeSchema(
         type="load_odbc",
@@ -179,6 +185,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=True,
+        tags=["load", "odbc", "database", "sql", "source"],
     ),
     NodeTypeSchema(
         type="load_file",
@@ -207,6 +214,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "file", "csv", "parquet", "excel", "stata", "source"],
     ),
     NodeTypeSchema(
         type="load_duckdb",
@@ -244,6 +252,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "duckdb", "database", "sql", "source"],
     ),
     NodeTypeSchema(
         type="push_odbc",
@@ -338,6 +347,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["export", "odbc", "database", "sink"],
     ),
     NodeTypeSchema(
         type="export_dta",
@@ -356,6 +366,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["export", "file", "stata", "sink"],
     ),
     NodeTypeSchema(
         type="load_internal_api",
@@ -367,6 +378,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=False,
         fixed_params=[],
         accepts_template_params=False,
+        tags=["load", "api", "source"],
     ),
     NodeTypeSchema(
         type="load_rest_api",
@@ -437,6 +449,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "api", "rest", "http", "source"],
     ),
     NodeTypeSchema(
         type="push_duckdb",
@@ -481,6 +494,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["export", "duckdb", "database", "sink"],
     ),
 ]
 

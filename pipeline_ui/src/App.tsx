@@ -33,8 +33,8 @@ import TransformEditorPanel from './components/TransformEditorPanel'
 import TemplateEditModal from './components/TemplateEditModal'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
-import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchTemplates, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
-import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, VariableDeclaration } from './types'
+import { createRun, createSession, deleteWorkspaceFile, executeNode, fetchActiveSession, fetchDag, fetchGitStatus, fetchNodeLineage, fetchVariableDeclarations, fetchWorkspaceVariables, fetchWorkspaceFile, getSession, invalidateSessionNode, pollRun, pollRunNodes, pollSessionNodes, previewNode, readWorkspacePipeline, writeSchemaFile, writeWorkspaceFile } from './api/client'
+import type { BuilderNodeData, ColumnSchema, NodePreviewResponse, NodeRunResponse, NodeTemplate, NodeTypeSchema, PaletteConfig, PandasTransformEntry, RunResponse, SessionNodeResponse, SessionResponse, VariableDeclaration } from './types'
 
 const nodeTypes: NodeTypes = {
   pipelineNode: PipelineNode as NodeTypes[string],
@@ -153,6 +153,14 @@ export default function App() {
   // Context menu for node right-click
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
 
+  // Save-as-config modal
+  const [saveAsConfigModal, setSaveAsConfigModal] = useState<{ nodeId: string } | null>(null)
+  const [saveAsConfigName, setSaveAsConfigName] = useState('')
+  const [saveAsConfigDesc, setSaveAsConfigDesc] = useState('')
+  const [saveAsConfigScope, setSaveAsConfigScope] = useState<'workspace' | 'pipeline'>('workspace')
+  const [saveAsConfigSaving, setSaveAsConfigSaving] = useState(false)
+  const [saveAsConfigError, setSaveAsConfigError] = useState<string | null>(null)
+
   // Run panel (non-workspace ad-hoc runs)
   const [activeRun, setActiveRun] = useState<RunResponse | null>(null)
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeRunResponse>>({})
@@ -186,7 +194,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState<string>(
     () => localStorage.getItem(WORKSPACE_KEY) ?? ''
   )
-  const { nodeTypes: paletteTypes, nodeTypeMap, pandasCategories, refreshTransforms } = useNodeTypes(workspace || undefined)
+  const { nodeTypeMap, pandasCategories, paletteData, refreshTransforms } = useNodeTypes(workspace || undefined)
 
   // Derive pandas transform entries directly from node data — no separate state
   // that can drift out of sync when nodes are updated (e.g. after schema inference).
@@ -219,12 +227,6 @@ export default function App() {
   const [variableDeclarations, setVariableDeclarations] = useState<VariableDeclaration[]>([])
   /** Pipeline-level default chart config — read from default_chart: in pipeline.yaml */
   const [defaultChartConfig, setDefaultChartConfig] = useState<ChartConfig | undefined>(undefined)
-
-  // Templates — fetched whenever workspace changes
-  const [remoteTemplates, setRemoteTemplates] = useState<NodeTemplate[]>([])
-  useEffect(() => {
-    fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => setRemoteTemplates([]))
-  }, [workspace])
 
   // Variables — load variables.yaml content whenever workspace changes
   useEffect(() => {
@@ -260,10 +262,6 @@ export default function App() {
       }))
   , [nodes])
 
-  const templates = useMemo(
-    () => [...remoteTemplates, ...pipelineTemplates],
-    [remoteTemplates, pipelineTemplates],
-  )
 
   function handleWorkspaceChange(path: string) {
     setWorkspace(path)
@@ -559,28 +557,28 @@ export default function App() {
 
   const [editingTemplate, setEditingTemplate] = useState<{ path: string; content: string } | null>(null)
 
-  async function handleEditTemplate(tmpl: NodeTemplate) {
-    if (!tmpl.template_path) return
+  async function handleEditTemplate(cfg: PaletteConfig) {
+    if (!cfg.template_path) return
     try {
-      const { content } = await fetchWorkspaceFile(tmpl.template_path)
-      setEditingTemplate({ path: tmpl.template_path, content })
+      const { content } = await fetchWorkspaceFile(cfg.template_path)
+      setEditingTemplate({ path: cfg.template_path, content })
     } catch (e) {
       alert(`Could not load template: ${e}`)
     }
   }
 
-  async function handleDeleteTemplate(tmpl: NodeTemplate) {
-    if (!tmpl.template_path) return
-    if (!window.confirm(`Delete template "${tmpl.label}"?\n\n${tmpl.template_path}`)) return
+  async function handleDeleteTemplate(cfg: PaletteConfig) {
+    if (!cfg.template_path) return
+    if (!window.confirm(`Delete template "${cfg.label}"?\n\n${cfg.template_path}`)) return
     try {
-      await deleteWorkspaceFile(tmpl.template_path)
-      // Also delete bundled SQL file if present
-      if (tmpl.template_file) {
-        const sqlFile = tmpl.template_file.replace(/\.yaml$/, '.sql.j2')
-        const sqlPath = tmpl.template_path.replace(/[^/\\]+$/, sqlFile)
+      await deleteWorkspaceFile(cfg.template_path)
+      // Also delete bundled SQL file if present (YAML template referencing a .sql.j2)
+      if (cfg.template_file) {
+        const sqlFile = cfg.template_file.replace(/\.yaml$/, '.sql.j2')
+        const sqlPath = cfg.template_path.replace(/[^/\\]+$/, sqlFile)
         await deleteWorkspaceFile(sqlPath).catch(() => {}) // best-effort
       }
-      fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})
+      refreshTransforms()
     } catch (e) {
       alert(`Failed to delete template: ${e}`)
     }
@@ -630,6 +628,44 @@ export default function App() {
       data: { ...source.data, output_schema: null, run_status: undefined },
     }])
     setSelectedNodeId(newId)
+  }
+
+  async function handleSaveAsConfig() {
+    if (!saveAsConfigModal) return
+    const slug = saveAsConfigName.trim().replace(/\s+/g, '_').toLowerCase()
+    if (!slug) { setSaveAsConfigError('Name is required'); return }
+    if (!workspace) { setSaveAsConfigError('No workspace open'); return }
+    const node = nodes.find((n) => n.id === saveAsConfigModal.nodeId)
+    if (!node) return
+
+    const configObj: Record<string, unknown> = {
+      node_type: node.data.node_type,
+      label: saveAsConfigName.trim(),
+      description: saveAsConfigDesc.trim() || `Saved config for ${node.data.node_type}`,
+      params: node.data.params ?? {},
+    }
+    if (node.data.template_file) configObj.template_file = node.data.template_file
+
+    let destPath: string
+    if (saveAsConfigScope === 'pipeline' && pipelineName !== 'Untitled') {
+      destPath = `${workspace.replace(/\\/g, '/')}/pipelines/${pipelineName}/config/${slug}.yaml`
+    } else {
+      destPath = `${workspace.replace(/\\/g, '/')}/node_templates/${slug}.yaml`
+    }
+
+    setSaveAsConfigSaving(true)
+    setSaveAsConfigError(null)
+    try {
+      await writeWorkspaceFile(destPath, yaml.dump(configObj, { lineWidth: 120 }))
+      refreshTransforms()
+      setSaveAsConfigModal(null)
+      setSaveAsConfigName('')
+      setSaveAsConfigDesc('')
+    } catch (e) {
+      setSaveAsConfigError(String(e))
+    } finally {
+      setSaveAsConfigSaving(false)
+    }
   }
 
   async function handleExecuteNode(nodeId: string) {
@@ -1009,9 +1045,9 @@ export default function App() {
   return (
     <div style={styles.root}>
       <Palette
-        nodeTypes={paletteTypes}
-        pandasCategories={pandasCategories}
-        templates={templates}
+        palette={paletteData}
+        pipelineTemplates={pipelineTemplates}
+        workspace={workspace || undefined}
         onEditTemplate={handleEditTemplate}
         onDeleteTemplate={handleDeleteTemplate}
       />
@@ -1099,7 +1135,7 @@ export default function App() {
           onDelete={handleDeleteNode}
           onClone={handleCloneNode}
           onClose={() => setSelectedNodeId(null)}
-          onTemplateSaved={() => fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})}
+          onTemplateSaved={() => refreshTransforms()}
           pipelineDir={pipelineDir ?? undefined}
           onSetTemplate={handleSetTemplate}
           chartConfig={selectedNode.data.chart_config as ChartConfig | undefined ?? defaultChartConfig}
@@ -1185,7 +1221,7 @@ export default function App() {
           onSave={async (content) => {
             await writeWorkspaceFile(editingTemplate.path, content)
             setEditingTemplate(null)
-            fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})
+            refreshTransforms()
           }}
           onClose={() => setEditingTemplate(null)}
         />
@@ -1211,6 +1247,74 @@ export default function App() {
           <button style={styles.contextMenuItem} onClick={() => handleRerunFromNode(contextMenu.nodeId)}>
             ▶ Rerun from here
           </button>
+          {workspace && (
+            <>
+              <div style={styles.contextMenuSeparator} />
+              <button style={styles.contextMenuItem} onClick={() => {
+                setContextMenu(null)
+                const node = nodes.find((n) => n.id === contextMenu.nodeId)
+                setSaveAsConfigName(node?.data.label || '')
+                setSaveAsConfigDesc('')
+                setSaveAsConfigScope(pipelineName !== 'Untitled' ? 'pipeline' : 'workspace')
+                setSaveAsConfigError(null)
+                setSaveAsConfigModal({ nodeId: contextMenu.nodeId })
+              }}>
+                ⊞ Save as config…
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {saveAsConfigModal && (
+        <div style={styles.modalOverlay} onClick={() => setSaveAsConfigModal(null)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalTitle}>Save node as config</div>
+            <label style={styles.modalLabel}>Name</label>
+            <input
+              style={styles.modalInput}
+              value={saveAsConfigName}
+              onChange={(e) => setSaveAsConfigName(e.target.value)}
+              placeholder="e.g. Load Sales Orders"
+              autoFocus
+            />
+            <label style={styles.modalLabel}>Description (optional)</label>
+            <input
+              style={styles.modalInput}
+              value={saveAsConfigDesc}
+              onChange={(e) => setSaveAsConfigDesc(e.target.value)}
+              placeholder="Brief description of this config"
+            />
+            <label style={styles.modalLabel}>Save to</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button
+                style={{ ...styles.scopeBtn, background: saveAsConfigScope === 'pipeline' ? '#cba6f722' : '#181825', borderColor: saveAsConfigScope === 'pipeline' ? '#cba6f7' : '#313244', color: saveAsConfigScope === 'pipeline' ? '#cba6f7' : '#6c7086' }}
+                onClick={() => setSaveAsConfigScope('pipeline')}
+                disabled={pipelineName === 'Untitled'}
+                title={pipelineName !== 'Untitled' ? `pipelines/${pipelineName}/config/` : 'No pipeline open'}
+              >
+                Pipeline
+              </button>
+              <button
+                style={{ ...styles.scopeBtn, background: saveAsConfigScope === 'workspace' ? '#cba6f722' : '#181825', borderColor: saveAsConfigScope === 'workspace' ? '#cba6f7' : '#313244', color: saveAsConfigScope === 'workspace' ? '#cba6f7' : '#6c7086' }}
+                onClick={() => setSaveAsConfigScope('workspace')}
+              >
+                Workspace
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: '#45475a', marginBottom: 12, fontFamily: 'monospace' }}>
+              {saveAsConfigScope === 'pipeline' && pipelineName !== 'Untitled'
+                ? `pipelines/${pipelineName}/config/${saveAsConfigName.trim().replace(/\s+/g,'_').toLowerCase() || '<name>'}.yaml`
+                : `node_templates/${saveAsConfigName.trim().replace(/\s+/g,'_').toLowerCase() || '<name>'}.yaml`}
+            </div>
+            {saveAsConfigError && <div style={{ color: '#f38ba8', fontSize: 11, marginBottom: 8 }}>{saveAsConfigError}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button style={styles.modalCancelBtn} onClick={() => setSaveAsConfigModal(null)}>Cancel</button>
+              <button style={styles.modalConfirmBtn} onClick={handleSaveAsConfig} disabled={saveAsConfigSaving}>
+                {saveAsConfigSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1355,5 +1459,39 @@ const styles: Record<string, React.CSSProperties> = {
   contextMenuSeparator: {
     borderTop: '1px solid #45475a',
     margin: '4px 0',
+  },
+  // Save-as-config modal (reuses modal pattern from NewPipelineModal)
+  modalOverlay: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  modal: {
+    background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 10,
+    padding: '24px 28px', minWidth: 360, maxWidth: 480, width: '100%',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+  },
+  modalTitle: {
+    fontSize: 15, fontWeight: 700, color: '#cdd6f4', marginBottom: 16,
+  },
+  modalLabel: {
+    display: 'block', fontSize: 11, color: '#a6adc8',
+    textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
+  },
+  modalInput: {
+    display: 'block', width: '100%', boxSizing: 'border-box',
+    background: '#181825', border: '1px solid #313244', borderRadius: 6,
+    color: '#cdd6f4', fontSize: 13, padding: '7px 10px', marginBottom: 12, outline: 'none',
+  },
+  scopeBtn: {
+    flex: 1, padding: '6px 0', border: '1px solid', borderRadius: 6,
+    fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.1s',
+  },
+  modalCancelBtn: {
+    padding: '7px 18px', background: 'none', border: '1px solid #45475a',
+    borderRadius: 6, color: '#a6adc8', fontSize: 13, cursor: 'pointer',
+  },
+  modalConfirmBtn: {
+    padding: '7px 18px', background: '#cba6f7', border: 'none',
+    borderRadius: 6, color: '#1e1e2e', fontSize: 13, fontWeight: 700, cursor: 'pointer',
   },
 }
