@@ -33,7 +33,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
     app.state._db_path = db_path or settings.db_path
 
-    from pipeline_service.api import pipelines, runs, sessions, templates, transforms, workspace
+    from pipeline_service.api import palette, pipelines, runs, sessions, templates, transforms, workspace
 
     app.include_router(runs.router, prefix="/runs", tags=["runs"])
     app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
@@ -41,6 +41,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.include_router(transforms.router, prefix="/node-types", tags=["node-types"])
     app.include_router(workspace.router, prefix="/workspace", tags=["workspace"])
     app.include_router(templates.router, prefix="/templates", tags=["templates"])
+    app.include_router(palette.router, prefix="/palette", tags=["palette"])
 
     return app
 

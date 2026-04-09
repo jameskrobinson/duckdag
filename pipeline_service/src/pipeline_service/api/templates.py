@@ -41,6 +41,12 @@ class NodeTemplate(BaseModel):
     """Absolute path to the template file (set for local templates)."""
     sql_preview: str | None = None
     """First ~300 chars of SQL for display in the palette tooltip."""
+    tags: list[str] = []
+    """User-defined tags for cross-type browsing and palette search (e.g. ['finance', 'daily'])."""
+    category: str | None = None
+    """Declared category for SQL templates — groups them into a synthetic Transforms group
+    in the palette (e.g. 'Finance', 'Analytics'). Declared via a ``-- category: X`` front-matter
+    comment at the top of the .sql file."""
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +242,45 @@ def _sql_node_type(sql_text: str) -> str:
     return "sql_exec" if _SQL_EXEC_KEYWORDS.search(sql_text) else "sql_transform"
 
 
+_FRONTMATTER_RE = re.compile(r"^\s*--\s*(\w+)\s*:\s*(.+)$")
+
+
+def _parse_sql_frontmatter(sql_text: str) -> dict[str, str]:
+    """Extract key: value pairs from leading ``-- key: value`` comment lines.
+
+    Stops at the first non-comment, non-blank line.
+    Recognised keys: category, tags, description, label.
+    """
+    meta: dict[str, str] = {}
+    for line in sql_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = _FRONTMATTER_RE.match(stripped)
+        if m:
+            meta[m.group(1).lower()] = m.group(2).strip()
+        else:
+            break  # stop at first non-comment line
+    return meta
+
+
 def _local_from_sql_files(templates_dir: Path, id_prefix: str = "local/sql") -> list[NodeTemplate]:
     """Discover SQL templates from a directory.
 
     Scans both the directory itself and its ``sql/`` subdirectory (new layout).
+
+    Front-matter key/value comments at the top of each ``.sql`` file are parsed
+    to populate metadata fields:
+
+    .. code-block:: sql
+
+        -- category: Finance
+        -- tags: daily, reporting
+        -- description: Summarise monthly revenue by product category
+        -- label: Monthly Revenue Summary
+
+    All keys are optional. ``category`` places the template into a named
+    synthetic transform group in the palette (rather than the flat SQL group).
     """
     results: list[NodeTemplate] = []
     # Scan both the flat root and the nested sql/ subdirectory
@@ -258,16 +299,22 @@ def _local_from_sql_files(templates_dir: Path, id_prefix: str = "local/sql") -> 
                 continue
             node_type = _sql_node_type(sql_text)
             preview = sql_text[:400].strip()
+            meta = _parse_sql_frontmatter(sql_text)
+            tags = [t.strip() for t in meta["tags"].split(",")] if "tags" in meta else []
+            label = meta.get("label") or sql_file.stem.replace("_", " ").title()
+            description = meta.get("description") or f"SQL template from {sql_file.name}"
             results.append(NodeTemplate(
                 id=f"{id_prefix}/{sql_file.stem}",
                 node_type=node_type,
-                label=sql_file.stem.replace("_", " ").title(),
-                description=f"SQL template from {sql_file.name}",
+                label=label,
+                description=description,
                 scope="local",
                 params={},
                 template_file=sql_file.name,
                 template_path=str(sql_file),
                 sql_preview=preview,
+                tags=tags,
+                category=meta.get("category"),
             ))
     return results
 
@@ -294,6 +341,8 @@ def _local_from_yaml_files(node_templates_dir: Path, id_prefix: str = "local/yam
         # Build a stable id from the relative path within the templates dir
         rel = yaml_file.relative_to(node_templates_dir)
         template_id = f"{id_prefix}/{rel.with_suffix('').as_posix().replace('/', '_')}"
+        raw_tags = raw.get("tags", [])
+        tags = [str(t) for t in raw_tags] if isinstance(raw_tags, list) else []
         results.append(NodeTemplate(
             id=template_id,
             node_type=raw["node_type"],
@@ -305,6 +354,7 @@ def _local_from_yaml_files(node_templates_dir: Path, id_prefix: str = "local/yam
             template_path=str(
                 node_templates_dir / raw["template_file"]
             ) if raw.get("template_file") else None,
+            tags=tags,
         ))
     return results
 

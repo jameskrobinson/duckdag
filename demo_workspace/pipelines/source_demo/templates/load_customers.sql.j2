@@ -1,0 +1,14 @@
+-- Load active customers from the SQL Server database.
+-- {{ region }} is injected from node params / variables.yaml.
+-- To run this node, configure the ODBC connection params in the node config panel
+-- and add the server credentials to env.yaml.
+SELECT
+    customer_id,
+    customer_name,
+    region,
+    segment,
+    account_manager
+FROM dbo.customers
+WHERE active = 1
+  AND region = '{{ region }}'
+ORDER BY customer_name

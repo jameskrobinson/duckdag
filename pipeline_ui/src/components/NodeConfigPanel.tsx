@@ -1,14 +1,19 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { BuilderNodeData, ColumnSchema, DQCheck, DQCheckType, LineageRow, NodePreviewResponse, NodeTypeSchema, PandasTransformEntry, ParamSchema } from '../types'
-import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, writeWorkspaceFile } from '../api/client'
+import { fetchWorkspaceFile, inspectTransform, previewNode, suggestConfig, workspaceFileExists, writeWorkspaceFile } from '../api/client'
 import * as yaml from 'js-yaml'
 import SqlEditor from './SqlEditor'
 import NodeOutputPreview from './NodeOutputPreview'
+import type { ChartConfig } from './ChartView'
 
 /** Context so ParamField can access variable names without prop drilling */
 const VariableNamesContext = createContext<string[]>([])
 
-const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec'])
+// Template-based SQL nodes: SQL lives in a .sql.j2 file, loaded from workspace
+const SQL_NODE_TYPES = new Set(['sql_transform', 'sql_exec', 'load_odbc'])
+// Nodes that can have SQL in either a template file OR an inline param ('query')
+// Once the user saves to a file, template_file is set and they behave like SQL_NODE_TYPES.
+const SQL_PARAM_NODE_TYPES = new Set(['load_duckdb'])
 
 interface NodeConfigPanelProps {
   nodeId: string
@@ -35,6 +40,16 @@ interface NodeConfigPanelProps {
   onClose: () => void
   /** Called after a template is successfully saved, so the palette can refresh */
   onTemplateSaved?: () => void
+  /** Absolute directory of the loaded pipeline — needed to derive template file paths when saving SQL for the first time. */
+  pipelineDir?: string
+  /** Called after a new SQL template file is created for this node, so the canvas can update template_path/template_file. */
+  onSetTemplate?: (nodeId: string, templatePath: string, templateFile: string) => void
+  /** Chart config to show in the preview modal (node-level override or pipeline default). */
+  chartConfig?: ChartConfig
+  /** Called when the user saves chart config for this specific node. */
+  onSaveChartForNode?: (nodeId: string, config: ChartConfig) => void
+  /** Called when the user saves chart config as the pipeline default. */
+  onSaveChartAsDefault?: (config: ChartConfig) => void
   /** Height in px of any fixed ribbon at the bottom of the viewport (SessionPanel / RunPanel).
    *  The panel height is reduced by this amount so its footer is never hidden behind the ribbon. */
   bottomOffset?: number
@@ -64,6 +79,11 @@ export default function NodeConfigPanel({
   onClone,
   onClose,
   onTemplateSaved,
+  pipelineDir,
+  onSetTemplate,
+  chartConfig,
+  onSaveChartForNode,
+  onSaveChartAsDefault,
   bottomOffset = 0,
 }: NodeConfigPanelProps) {
   const [params, setParams] = useState<Record<string, unknown>>(data.params ?? {})
@@ -88,11 +108,36 @@ export default function NodeConfigPanel({
   const [sqlSaving, setSqlSaving] = useState(false)
   const [sqlSaveError, setSqlSaveError] = useState<string | null>(null)
   const [sqlDirty, setSqlDirty] = useState(false)
-  const isSqlNode = SQL_NODE_TYPES.has(data.node_type)
+
+  // Save-to-file prompt — shown when the user clicks Save but no template file is linked yet
+  const [saveToFilePrompt, setSaveToFilePrompt] = useState(false)
+  const [pendingSqlForFile, setPendingSqlForFile] = useState('')
+  const [filenameDraft, setFilenameDraft] = useState('')
+  const [filenameSaving, setFilenameSaving] = useState(false)
+  const [filenameSaveError, setFilenameSaveError] = useState<string | null>(null)
+
+  // A node is "param-based" only when it has no template_file yet.
+  // Once the user saves SQL to a file, template_file is set and it becomes template-based.
+  const isSqlParamNode = SQL_PARAM_NODE_TYPES.has(data.node_type) && !data.template_file
+  // Template-based: either always-template types, OR a param-type node that now has a file.
+  const isSqlNode = SQL_NODE_TYPES.has(data.node_type) ||
+    (SQL_PARAM_NODE_TYPES.has(data.node_type) && !!data.template_file)
   const templatePath = data.template_path as string | undefined
 
+  // Load SQL content from file (template nodes) or from 'query' param (param-based nodes)
   useEffect(() => {
-    if (!isSqlNode || !templatePath) {
+    if (isSqlParamNode) {
+      setSqlContent((params.query as string) ?? '')
+      setSqlDirty(false)
+      return
+    }
+    if (!isSqlNode) {
+      setSqlContent('')
+      setSqlDirty(false)
+      return
+    }
+    if (!templatePath) {
+      // No file linked yet — start with empty editor
       setSqlContent('')
       setSqlDirty(false)
       return
@@ -102,7 +147,7 @@ export default function NodeConfigPanel({
       .then((r) => { setSqlContent(r.content); setSqlDirty(false) })
       .catch(() => setSqlContent(''))
       .finally(() => setSqlLoading(false))
-  }, [isSqlNode, templatePath])
+  }, [isSqlNode, isSqlParamNode, templatePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSqlChange(newSql: string) {
     setSqlContent(newSql)
@@ -110,7 +155,15 @@ export default function NodeConfigPanel({
   }
 
   async function handleSaveSql(sql: string) {
-    if (!templatePath) return
+    // If no template file is linked yet, show the "save to file" prompt instead.
+    if (!templatePath) {
+      if (!pipelineDir) return  // can't construct a path without knowing the pipeline dir
+      setPendingSqlForFile(sql)
+      setFilenameDraft(`${nodeId}.sql.j2`)
+      setFilenameSaveError(null)
+      setSaveToFilePrompt(true)
+      return
+    }
     setSqlSaving(true)
     setSqlSaveError(null)
     try {
@@ -125,36 +178,91 @@ export default function NodeConfigPanel({
     }
   }
 
+  async function confirmSaveToFile() {
+    const name = filenameDraft.trim()
+    if (!name || !pipelineDir) return
+    // Ensure .sql.j2 or .sql suffix
+    const filename = name.includes('.') ? name : `${name}.sql.j2`
+    const fullPath = `${pipelineDir.replace(/\\/g, '/')}/templates/${filename}`
+    setFilenameSaving(true)
+    setFilenameSaveError(null)
+    try {
+      await writeWorkspaceFile(fullPath, pendingSqlForFile)
+      // Remove inline query param now that SQL lives in a file
+      const nextParams = { ...params }
+      delete nextParams.query
+      onUpdate(nodeId, nextParams)
+      setParams(nextParams)
+      onSetTemplate?.(nodeId, fullPath, filename)
+      setSqlDirty(false)
+      setSaveToFilePrompt(false)
+    } catch (e) {
+      setFilenameSaveError(String(e))
+    } finally {
+      setFilenameSaving(false)
+    }
+  }
+
   // Save-as-template form
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateDesc, setTemplateDesc] = useState('')
+  const [templateTags, setTemplateTags] = useState('')
   const [templateSaving, setTemplateSaving] = useState(false)
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null)
   const [templateSaved, setTemplateSaved] = useState(false)
 
-  async function handleSaveAsTemplate() {
+  const [templateConflict, setTemplateConflict] = useState<string | null>(null)
+
+  async function handleSaveAsTemplate(force = false) {
     if (!workspace || !templateName.trim()) return
     setTemplateSaving(true)
     setTemplateSaveError(null)
+    setTemplateConflict(null)
     try {
       const slug = templateName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      const yamlPath = `${workspace}/node_templates/${slug}.yaml`
+
+      // Conflict check — warn before overwriting an existing template
+      if (!force && await workspaceFileExists(yamlPath)) {
+        setTemplateConflict(yamlPath)
+        setTemplateSaving(false)
+        return
+      }
+
+      const parsedTags = templateTags.split(',').map((t) => t.trim()).filter(Boolean)
       const templateObj: Record<string, unknown> = {
         node_type: data.node_type,
         label: templateName.trim(),
         description: templateDesc.trim() || data.description || '',
+        ...(parsedTags.length > 0 ? { tags: parsedTags } : {}),
         params: { ...params },
       }
-      if (data.template_file) templateObj.template_file = data.template_file
+
+      // If this node has SQL, bundle it alongside the YAML in node_templates/.
+      // The backend's _local_from_yaml_files resolves template_path as:
+      //   {workspace}/node_templates/{template_file}
+      // so the SQL file must live there, not in the originating pipeline's templates/ dir.
+      if ((isSqlNode || isSqlParamNode) && sqlContent.trim()) {
+        // Suffix with nodeId to avoid collisions between same-named templates
+        // from different pipelines sharing the node_templates/ directory.
+        const sqlFilename = `${slug}_${nodeId}.sql.j2`
+        const sqlPath = `${workspace}/node_templates/${sqlFilename}`
+        await writeWorkspaceFile(sqlPath, sqlContent)
+        templateObj.template_file = sqlFilename
+      } else if (data.template_file) {
+        // Non-SQL node with a template file reference — keep the reference but note
+        // that it may not be portable if the file doesn't exist in node_templates/.
+        templateObj.template_file = data.template_file
+      }
+
       const content = yaml.dump(templateObj, { lineWidth: 120 })
-      // Ensure node_templates dir path — writeWorkspaceFile only needs the file to exist in an existing dir,
-      // but the dir may not exist yet; we write via the service which checks parent exists.
-      const path = `${workspace}/node_templates/${slug}.yaml`
-      await writeWorkspaceFile(path, content)
+      await writeWorkspaceFile(yamlPath, content)
       setTemplateSaved(true)
       setShowSaveTemplate(false)
       setTemplateName('')
       setTemplateDesc('')
+      setTemplateTags('')
       onTemplateSaved?.()
     } catch (e) {
       setTemplateSaveError(String(e))
@@ -262,6 +370,12 @@ export default function NodeConfigPanel({
   const acceptsTemplateParams = resolvedPandasEntry ? false : (nodeTypeSchema?.accepts_template_params ?? false)
   const producesOutput = nodeTypeSchema?.produces_output ?? true
 
+  // For load_duckdb (and any future SQL_PARAM_NODE_TYPES), always hide 'query' from
+  // the regular param fields — it is shown in the SQL editor whether param-based or template-based.
+  const visibleFixedParams = SQL_PARAM_NODE_TYPES.has(data.node_type)
+    ? fixedParams.filter((p) => p.name !== 'query')
+    : fixedParams
+
   // Extra params not covered by fixed_params (for free key/value editor)
   const knownNames = new Set(fixedParams.map((p) => p.name))
   const extraParams = Object.entries(params).filter(([k]) => !knownNames.has(k))
@@ -291,8 +405,8 @@ export default function NodeConfigPanel({
       )}
 
       <div style={styles.body}>
-        {/* Fixed params */}
-        {fixedParams.map((param) => (
+        {/* Fixed params (query hidden for param-based SQL nodes — shown in editor below) */}
+        {visibleFixedParams.map((param) => (
           <ParamField
             key={param.name}
             param={param}
@@ -323,35 +437,68 @@ export default function NodeConfigPanel({
           </div>
         )}
 
-        {/* SQL editor */}
-        {isSqlNode && (
+        {/* SQL editor — all SQL-capable nodes */}
+        {(isSqlNode || isSqlParamNode) && (
           <div style={styles.sqlSection}>
             <div style={styles.sectionLabel}>
               {templateFilename
                 ? <span>SQL — <span style={styles.templateFilename}>{templateFilename}</span></span>
                 : 'SQL'}
             </div>
-            {!templatePath && (
-              <div style={styles.sqlHint}>No template_path set — load a pipeline from the workspace to edit SQL here.</div>
+
+            {/* Save-to-file prompt — shown when no template file is linked yet and user clicks Save */}
+            {saveToFilePrompt && (
+              <div style={styles.saveToFilePrompt}>
+                <div style={styles.saveToFileTitle}>Save SQL to file</div>
+                <div style={styles.saveToFileHint}>
+                  Enter a filename for this SQL template. It will be saved to <span style={styles.saveToFilePath}>templates/</span>.
+                </div>
+                <div style={styles.saveToFileRow}>
+                  <input
+                    autoFocus
+                    value={filenameDraft}
+                    onChange={(e) => setFilenameDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') confirmSaveToFile(); if (e.key === 'Escape') setSaveToFilePrompt(false) }}
+                    placeholder="my_query.sql.j2"
+                    style={styles.saveToFileInput}
+                  />
+                  <button
+                    onClick={confirmSaveToFile}
+                    disabled={!filenameDraft.trim() || filenameSaving}
+                    style={{ ...styles.saveToFileBtn, opacity: filenameDraft.trim() && !filenameSaving ? 1 : 0.4 }}
+                  >
+                    {filenameSaving ? 'Saving…' : 'Save'}
+                  </button>
+                  <button onClick={() => setSaveToFilePrompt(false)} style={styles.saveToFileCancelBtn}>Cancel</button>
+                </div>
+                {filenameSaveError && <div style={styles.saveToFileError}>{filenameSaveError}</div>}
+              </div>
             )}
-            {templatePath && sqlLoading && (
-              <div style={styles.sqlHint}>Loading…</div>
+
+            {!templatePath && !pipelineDir && !isSqlParamNode && (
+              <div style={styles.sqlHint}>Open a pipeline from the workspace to edit and save SQL here.</div>
             )}
-            {templatePath && !sqlLoading && (
-              <SqlEditor
-                value={sqlContent}
-                onChange={handleSqlChange}
-                onSave={handleSaveSql}
-                dirty={sqlDirty}
-                saving={sqlSaving}
-                saveError={sqlSaveError}
-                inputSchemas={inputSchemas}
-                variableNames={variableNames}
-                filename={templateFilename}
-                onRunSql={onRunSqlDraft
-                  ? (sql) => onRunSqlDraft(nodeId, sql)
-                  : undefined}
-              />
+            {sqlLoading && <div style={styles.sqlHint}>Loading…</div>}
+            {!sqlLoading && (
+              <>
+                {!templatePath && !isSqlParamNode && pipelineDir && (
+                  <div style={styles.sqlNewFileHint}>SQL will be saved to a new file in <span style={styles.saveToFilePath}>templates/</span> on first Save.</div>
+                )}
+                <SqlEditor
+                  value={sqlContent}
+                  onChange={handleSqlChange}
+                  onSave={handleSaveSql}
+                  dirty={sqlDirty}
+                  saving={sqlSaving}
+                  saveError={sqlSaveError}
+                  inputSchemas={inputSchemas}
+                  variableNames={variableNames}
+                  filename={templateFilename ?? null}
+                  onRunSql={onRunSqlDraft
+                    ? (sql) => onRunSqlDraft(nodeId, sql)
+                    : undefined}
+                />
+              </>
             )}
           </div>
         )}
@@ -396,6 +543,10 @@ export default function NodeConfigPanel({
             nodeId={nodeId}
             onClose={() => setShowPreviewModal(false)}
             fetchFn={(_runId, _nodeId, limit, whereClause) => onPreview(nodeId, limit, whereClause)}
+            chartConfig={chartConfig}
+            canSave={!!(onSaveChartForNode || onSaveChartAsDefault)}
+            onSaveChartForNode={onSaveChartForNode ? (cfg) => onSaveChartForNode(nodeId, cfg) : undefined}
+            onSaveChartAsDefault={onSaveChartAsDefault}
           />
         )}
 
@@ -499,22 +650,47 @@ export default function NodeConfigPanel({
             value={templateDesc}
             onChange={(e) => setTemplateDesc(e.target.value)}
           />
+          <input
+            style={{ ...styles.input, marginTop: 4 }}
+            placeholder="Tags (optional, comma-separated — e.g. finance, daily)"
+            value={templateTags}
+            onChange={(e) => setTemplateTags(e.target.value)}
+          />
           <div style={styles.saveTemplateHint}>
             Saves to <code style={styles.code}>{workspace}/node_templates/</code>
           </div>
           {templateSaveError && <div style={styles.errorNote}>{templateSaveError}</div>}
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button
-              onClick={handleSaveAsTemplate}
-              disabled={templateSaving || !templateName.trim()}
-              style={{ ...styles.runBtn, flex: 1, opacity: !templateName.trim() ? 0.4 : 1 }}
-            >
-              {templateSaving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={() => setShowSaveTemplate(false)} style={styles.cancelBtn}>
-              Cancel
-            </button>
-          </div>
+          {templateConflict && (
+            <div style={styles.conflictNote}>
+              A template with this name already exists. Overwrite it?
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button
+                  onClick={() => handleSaveAsTemplate(true)}
+                  disabled={templateSaving}
+                  style={{ ...styles.runBtn, background: '#f38ba822', border: '1px solid #f38ba844', color: '#f38ba8' }}
+                >
+                  Overwrite
+                </button>
+                <button onClick={() => setTemplateConflict(null)} style={styles.cancelBtn}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {!templateConflict && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button
+                onClick={() => handleSaveAsTemplate(false)}
+                disabled={templateSaving || !templateName.trim()}
+                style={{ ...styles.runBtn, flex: 1, opacity: !templateName.trim() ? 0.4 : 1 }}
+              >
+                {templateSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setShowSaveTemplate(false)} style={styles.cancelBtn}>
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -569,6 +745,13 @@ function ParamField({
           style={styles.textarea}
           placeholder="JSON"
         />
+      ) : param.type === 'password' ? (
+        <VarAutocompleteInput
+          value={strVal}
+          onChange={(v) => onChange(v)}
+          placeholder={param.default != null ? String(param.default) : ''}
+          inputType="password"
+        />
       ) : (
         <VarAutocompleteInput
           value={strVal}
@@ -588,10 +771,12 @@ function VarAutocompleteInput({
   value,
   onChange,
   placeholder,
+  inputType = 'text',
 }: {
   value: string
   onChange: (v: string) => void
   placeholder?: string
+  inputType?: 'text' | 'password'
 }) {
   const variableNames = useContext(VariableNamesContext)
   const [showDropdown, setShowDropdown] = useState(false)
@@ -643,7 +828,7 @@ function VarAutocompleteInput({
     <div style={{ position: 'relative' }}>
       <input
         ref={inputRef}
-        type="text"
+        type={inputType}
         value={value}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
@@ -893,6 +1078,27 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   sqlHint: { fontSize: 11, color: '#45475a', fontStyle: 'italic' },
+  sqlNewFileHint: { fontSize: 10, color: '#6c7086', fontStyle: 'italic', marginBottom: 4 },
+  saveToFilePrompt: {
+    background: '#181825', border: '1px solid #313244', borderRadius: 6,
+    padding: '10px 12px', marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  saveToFileTitle: { fontSize: 12, fontWeight: 700, color: '#cdd6f4' },
+  saveToFileHint: { fontSize: 11, color: '#6c7086' },
+  saveToFilePath: { color: '#89b4fa', fontFamily: 'monospace' },
+  saveToFileRow: { display: 'flex', gap: 6, alignItems: 'center' },
+  saveToFileInput: {
+    flex: 1, background: '#11111b', border: '1px solid #45475a', borderRadius: 4,
+    color: '#cdd6f4', fontSize: 12, padding: '4px 8px', outline: 'none', fontFamily: 'monospace',
+  },
+  saveToFileBtn: {
+    background: '#a6e3a122', border: '1px solid #a6e3a144', color: '#a6e3a1',
+    borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontSize: 11, fontWeight: 600, flexShrink: 0,
+  },
+  saveToFileCancelBtn: {
+    background: 'none', border: 'none', color: '#6c7086', cursor: 'pointer', fontSize: 11, flexShrink: 0,
+  },
+  saveToFileError: { fontSize: 11, color: '#f38ba8' },
   cancelBtn: {
     background: '#313244', border: '1px solid #45475a', color: '#a6adc8',
     borderRadius: 4, padding: '1px 8px', cursor: 'pointer', fontSize: 10,
@@ -916,6 +1122,7 @@ const styles: Record<string, React.CSSProperties> = {
   aiNote: { background: '#1e1e2e', border: '1px solid #89b4fa44', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#89b4fa', lineHeight: 1.5 },
   aiIcon: { marginRight: 4 },
   errorNote: { background: '#f38ba822', border: '1px solid #f38ba844', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f38ba8' },
+  conflictNote: { background: '#fab38722', border: '1px solid #fab38744', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#fab387' },
   inspectingNote: { padding: '4px 14px', fontSize: 11, color: '#6c7086', fontStyle: 'italic', borderBottom: '1px solid #313244' },
   aiBtn: { flex: '1 1 auto', minWidth: 80, background: '#89b4fa22', border: '1px solid #89b4fa44', color: '#89b4fa', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
   runBtn: { flex: '1 1 auto', minWidth: 90, background: '#a6e3a122', border: '1px solid #a6e3a144', color: '#a6e3a1', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },

@@ -1,0 +1,21 @@
+node_type: pandas_transform
+label: Revenue Summary by Region
+description: Group by region and compute total revenue, order count, and average order value.
+params:
+  transform: analytics.group_summary
+  group_by:
+    - region
+  aggs:
+    total_revenue:
+      - revenue
+      - sum
+    order_count:
+      - order_id
+      - count
+    avg_order_value:
+      - revenue
+      - mean
+tags:
+  - analytics
+  - aggregation
+  - sales

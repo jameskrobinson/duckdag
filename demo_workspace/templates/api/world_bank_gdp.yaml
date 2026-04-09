@@ -1,0 +1,18 @@
+node_type: load_rest_api
+label: World Bank — GDP per Capita
+description: >
+  Fetch GDP per capita (current USD) time series for all countries from the
+  World Bank API. Returns ~5 most-recent years.
+params:
+  url: https://api.worldbank.org/v2/country/all/indicator/NY.GDP.PCAP.CD
+  method: GET
+  params:
+    format: json
+    per_page: 500
+    mrv: 5
+  record_path: "1"
+  timeout: 30
+tags:
+  - economics
+  - world-bank
+  - rest-api

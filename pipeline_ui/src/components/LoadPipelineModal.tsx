@@ -52,7 +52,12 @@ export default function LoadPipelineModal({ workspace, onLoad, onClose }: LoadPi
               onClick={() => setSelected(f.full_path)}
               onDoubleClick={() => onLoad(f.full_path)}
             >
-              <span style={styles.fileName}>{f.name}</span>
+              <div style={styles.fileRowTop}>
+                <span style={styles.fileName}>{f.name}</span>
+                {f.last_modified && (
+                  <span style={styles.fileAge}>{_relativeTime(f.last_modified)}</span>
+                )}
+              </div>
               <span style={styles.filePath}>{f.relative_path}</span>
             </div>
           ))}
@@ -71,6 +76,18 @@ export default function LoadPipelineModal({ workspace, onLoad, onClose }: LoadPi
       </div>
     </div>
   )
+}
+
+function _relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 2) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d ago`
+  return new Date(iso).toLocaleDateString()
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -101,7 +118,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer', borderBottom: '1px solid #1e1e2e',
   },
   fileRowSelected: { background: '#89b4fa22' },
+  fileRowTop: { display: 'flex', alignItems: 'baseline', gap: 8 },
   fileName: { fontSize: 13, color: '#cdd6f4', fontWeight: 600 },
+  fileAge: { fontSize: 10, color: '#6c7086', fontStyle: 'italic' },
   filePath: { fontSize: 10, color: '#6c7086' },
   footer: {
     display: 'flex', gap: 8, padding: '10px 16px', borderTop: '1px solid #313244',

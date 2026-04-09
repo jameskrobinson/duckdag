@@ -67,6 +67,12 @@ def cli() -> None:
     "--verbose", "-v", is_flag=True, default=False,
     help="Print per-node timing and row counts.",
 )
+@click.option(
+    "--var", "var_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Override a pipeline variable: --var start_date=2024-01-01 (repeatable).",
+)
 def run(
     pipeline_yaml: Path,
     env_yaml: Optional[Path],
@@ -74,13 +80,25 @@ def run(
     target_node: Optional[str],
     dry_run: bool,
     verbose: bool,
+    var_overrides: tuple[str, ...],
 ) -> None:
     """Execute a pipeline defined in PIPELINE_YAML."""
     pipeline_yaml = pipeline_yaml.resolve()
 
+    # Parse --var KEY=VALUE pairs
+    variables: dict[str, str] | None = None
+    if var_overrides:
+        variables = {}
+        for item in var_overrides:
+            if "=" not in item:
+                click.echo(f"[error] --var must be in KEY=VALUE format, got: {item!r}", err=True)
+                sys.exit(1)
+            k, _, v = item.partition("=")
+            variables[k.strip()] = v
+
     # Resolve spec (validates, resolves env vars, checks DAG)
     try:
-        spec = resolve_pipeline(pipeline_yaml, env_path=env_yaml)
+        spec = resolve_pipeline(pipeline_yaml, env_path=env_yaml, variables=variables)
     except Exception as exc:
         click.echo(f"[error] Failed to parse pipeline: {exc}", err=True)
         sys.exit(1)
@@ -212,40 +230,62 @@ def _print_store_summary(store: DuckDBStore, plan: ExecutionPlan) -> None:
 
 @cli.group()
 def session() -> None:
-    """Inspect past pipeline runs from the master registry."""
+    """Inspect past pipeline sessions from the master registry."""
 
 
 @session.command("list")
-@click.option("--workspace", default=None, help="Filter to runs from this workspace path.")
-@click.option("--limit", default=20, show_default=True, help="Maximum number of runs to show.")
-def session_list(workspace: Optional[str], limit: int) -> None:
-    """List past pipeline runs, most recent first."""
+@click.option("--workspace", default=None, help="Filter to sessions from this workspace path.")
+@click.option("--pipeline", default=None, help="Filter by pipeline name (substring match).")
+@click.option("--status", default=None, help="Filter by status: success, failed, active, running.")
+@click.option("--limit", default=20, show_default=True, help="Maximum number of sessions to show.")
+def session_list(workspace: Optional[str], pipeline: Optional[str], status: Optional[str], limit: int) -> None:
+    """List past pipeline sessions, most recent first."""
     from pipeline_core.registry import list_runs
     try:
-        runs = list_runs(workspace=workspace, limit=limit)
+        runs = list_runs(workspace=workspace, limit=limit * 5 if pipeline or status else limit)
     except Exception as exc:
         click.echo(f"[error] Could not read registry: {exc}", err=True)
         sys.exit(1)
 
+    # Apply optional filters
+    if pipeline:
+        pl = pipeline.lower()
+        runs = [r for r in runs if pl in (r.get("pipeline_file") or "").lower()]
+    if status:
+        runs = [r for r in runs if r.get("status") == status]
+    runs = runs[:limit]
+
     if not runs:
-        click.echo("No runs found.")
+        click.echo("No sessions found.")
         return
 
-    click.echo(f"{'RUN ID':<26}  {'STATUS':<10}  {'PIPELINE':<40}  CREATED")
-    click.echo("─" * 100)
+    click.echo(f"{'SESSION ID':<26}  {'STATUS':<10}  {'PIPELINE':<36}  {'GIT':<9}  CREATED")
+    click.echo("─" * 106)
     for r in runs:
-        pipeline = (r.get("pipeline_file") or "—")[-40:]
+        # Derive a short pipeline name from the file path
+        pf = r.get("pipeline_file") or ""
+        parts = pf.replace("\\", "/").split("/")
+        # New layout: pipelines/{name}/pipeline.yaml → name
+        if "pipelines" in parts:
+            idx = parts.index("pipelines")
+            pname = parts[idx + 1] if idx + 1 < len(parts) else pf
+        else:
+            pname = parts[-2] if len(parts) >= 2 else (parts[0] if parts else "—")
+        pname = pname[:36]
+
         created = (r.get("created_at") or "")[:19].replace("T", " ")
-        status = r.get("status", "?")
-        status_colour = {"success": "\033[32m", "failed": "\033[31m", "running": "\033[34m"}.get(status, "")
-        reset = "\033[0m" if status_colour else ""
-        click.echo(f"{r['run_id']:<26}  {status_colour}{status:<10}{reset}  {pipeline:<40}  {created}")
+        st = r.get("status", "?")
+        git = (r.get("git_hash") or "")[:8]
+        uncommitted = "⚠" if r.get("has_uncommitted_changes") else " "
+        colour = {"success": "\033[32m", "failed": "\033[31m", "running": "\033[34m", "active": "\033[36m"}.get(st, "")
+        reset = "\033[0m" if colour else ""
+        click.echo(f"{r['run_id']:<26}  {colour}{st:<10}{reset}  {pname:<36}  {git:<8}{uncommitted}  {created}")
 
 
 @session.command("inspect")
 @click.argument("run_id")
 def session_inspect(run_id: str) -> None:
-    """Show full details for a past run, including bundle path and manifest fields."""
+    """Show full details for a session, including per-node statuses from the bundle."""
     from pipeline_core.registry import get_run
     try:
         run = get_run(run_id)
@@ -254,8 +294,64 @@ def session_inspect(run_id: str) -> None:
         sys.exit(1)
 
     if run is None:
-        click.echo(f"[error] Run '{run_id}' not found in registry.", err=True)
+        click.echo(f"[error] Session '{run_id}' not found in registry.", err=True)
         sys.exit(1)
 
+    # Print manifest fields (skip verbose/null ones)
+    _SKIP_FIELDS = {"transform_file_hashes"}
+    click.echo(f"\n  Session: {run_id}")
+    click.echo("  " + "─" * 60)
     for key, val in run.items():
+        if key in _SKIP_FIELDS or val is None:
+            continue
+        if key == "error" and not val:
+            continue
         click.echo(f"  {key:<30} {val}")
+
+    # Transform file hashes summary
+    hashes = run.get("transform_file_hashes") or {}
+    if hashes:
+        click.echo(f"\n  Transform files snapshotted: {len(hashes)}")
+
+    # Per-node statuses from bundle session.duckdb
+    bundle_path = run.get("bundle_path")
+    if not bundle_path:
+        return
+
+    session_db = Path(bundle_path) / "session.duckdb"
+    if not session_db.exists():
+        return
+
+    try:
+        import duckdb as _duckdb
+        conn = _duckdb.connect(str(session_db), read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT node_id, status, started_at, finished_at, error "
+                "FROM _session_nodes ORDER BY started_at NULLS LAST"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+    if not rows:
+        return
+
+    click.echo(f"\n  {'NODE':<30}  {'STATUS':<12}  {'DURATION':>9}  ERROR")
+    click.echo("  " + "─" * 80)
+    for node_id, st, started, finished, error in rows:
+        dur = "—"
+        if started and finished:
+            try:
+                from datetime import datetime as _dt
+                s = _dt.fromisoformat(started.replace("Z", "+00:00"))
+                e = _dt.fromisoformat(finished.replace("Z", "+00:00"))
+                secs = (e - s).total_seconds()
+                dur = f"{secs:.2f}s"
+            except Exception:
+                pass
+        colour = {"completed": "\033[32m", "failed": "\033[31m", "running": "\033[34m", "skipped": "\033[33m"}.get(st, "")
+        reset = "\033[0m" if colour else ""
+        err_summary = (error or "")[:40]
+        click.echo(f"  {node_id:<30}  {colour}{st:<12}{reset}  {dur:>9}  {err_summary}")

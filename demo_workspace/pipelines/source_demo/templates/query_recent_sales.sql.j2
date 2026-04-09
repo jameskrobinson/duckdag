@@ -1,0 +1,11 @@
+-- Query aggregated sales from the retail_analysis pipeline database.
+-- Edit this SQL and click Run to preview results (requires retail_analysis
+-- to have been run at least once so pipeline.duckdb exists).
+SELECT
+    product,
+    category,
+    SUM(quantity)          AS units_sold,
+    ROUND(SUM(revenue), 2) AS total_revenue
+FROM filtered_sales
+GROUP BY product, category
+ORDER BY total_revenue DESC

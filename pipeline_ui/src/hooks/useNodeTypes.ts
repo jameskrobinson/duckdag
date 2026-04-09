@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchNodeTypes, fetchPandasTransforms, fetchTransformMtimes } from '../api/client'
-import type { NodeTypeSchema, PandasTransformCategory } from '../types'
+import { fetchNodeTypes, fetchPalette, fetchPandasTransforms, fetchTransformMtimes } from '../api/client'
+import type { NodeTypeSchema, PaletteResponse, PandasTransformCategory } from '../types'
 
 const WATCHER_INTERVAL_MS = 3000
 
 export function useNodeTypes(workspace?: string) {
   const [nodeTypes, setNodeTypes] = useState<NodeTypeSchema[]>([])
   const [pandasCategories, setPandasCategories] = useState<PandasTransformCategory[]>([])
+  const [paletteData, setPaletteData] = useState<PaletteResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -17,10 +18,15 @@ export function useNodeTypes(workspace?: string) {
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchNodeTypes(), fetchPandasTransforms(workspace || undefined)])
-      .then(([types, pandas]) => {
+    Promise.all([
+      fetchNodeTypes(),
+      fetchPandasTransforms(workspace || undefined),
+      fetchPalette(workspace || undefined),
+    ])
+      .then(([types, pandas, palette]) => {
         setNodeTypes(types)
         setPandasCategories(pandas)
+        setPaletteData(palette)
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
@@ -59,6 +65,7 @@ export function useNodeTypes(workspace?: string) {
     nodeTypes,
     nodeTypeMap: Object.fromEntries(nodeTypes.map((nt) => [nt.type, nt])),
     pandasCategories,
+    paletteData,
     loading,
     error,
     refreshTransforms,

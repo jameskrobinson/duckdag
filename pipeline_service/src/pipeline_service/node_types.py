@@ -41,6 +41,9 @@ class NodeTypeSchema(BaseModel):
     """True if additional arbitrary params are forwarded to the Jinja2 template
     as context. The builder should offer a free-form key/value editor for these."""
 
+    tags: list[str] = []
+    """Searchable tags for palette browsing (e.g. ['sql', 'load', 'database'])."""
+
 
 # ---------------------------------------------------------------------------
 # Definitions — one per NodeType in pipeline_core.resolver.models
@@ -61,6 +64,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=False,
         fixed_params=[],
         accepts_template_params=True,
+        tags=["sql", "duckdb", "export", "ddl"],
     ),
     NodeTypeSchema(
         type="sql_transform",
@@ -76,6 +80,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=True,
         fixed_params=[],
         accepts_template_params=True,
+        tags=["sql", "duckdb", "transform"],
     ),
     NodeTypeSchema(
         type="pandas_transform",
@@ -102,14 +107,16 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["python", "pandas", "transform"],
     ),
     NodeTypeSchema(
         type="load_odbc",
         label="Load from ODBC",
         description=(
-            "Execute a SQL template against a named ODBC connection and load the "
-            "result as a DataFrame. The connection is looked up from the pipeline's "
-            "odbc: config block."
+            "Execute a SQL template against an ODBC connection and load the result as a DataFrame. "
+            "Specify connection details inline (driver, server, database, etc.) or reference a "
+            "named connection from the pipeline's odbc: config block via odbc_key. "
+            "Use ${env.xxx} references for sensitive values such as passwords."
         ),
         category="load",
         needs_template=True,
@@ -119,11 +126,66 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ParamSchema(
                 name="odbc_key",
                 type="string",
-                required=True,
-                description="Key into the pipeline's odbc: config block (e.g. 'my_db').",
+                required=False,
+                description=(
+                    "Named connection from the pipeline's odbc: config block. "
+                    "If set, all inline connection params below are ignored."
+                ),
+            ),
+            ParamSchema(
+                name="connection_string",
+                type="string",
+                required=False,
+                description=(
+                    "Full ODBC connection string (e.g. 'DRIVER={ODBC Driver 17 for SQL Server};SERVER=…'). "
+                    "If set, takes precedence over all other connection params."
+                ),
+            ),
+            ParamSchema(
+                name="driver",
+                type="string",
+                required=False,
+                description="ODBC driver name, e.g. 'ODBC Driver 17 for SQL Server'.",
+            ),
+            ParamSchema(
+                name="server",
+                type="string",
+                required=False,
+                description="Server hostname or IP address. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="database",
+                type="string",
+                required=False,
+                description="Database name.",
+            ),
+            ParamSchema(
+                name="trusted",
+                type="boolean",
+                required=False,
+                description="Use Windows trusted authentication (Trusted_Connection=yes).",
+            ),
+            ParamSchema(
+                name="uid",
+                type="string",
+                required=False,
+                description="Username. Supports ${env.xxx} references.",
+            ),
+            ParamSchema(
+                name="pwd",
+                type="password",
+                required=False,
+                description="Password. Use ${env.xxx} to avoid storing credentials in pipeline.yaml.",
+            ),
+            ParamSchema(
+                name="dsn",
+                type="string",
+                required=False,
+                description="Data Source Name (DSN) — alternative to specifying driver/server/database.",
             ),
         ],
         accepts_template_params=True,
+        tags=["load", "odbc", "database", "sql", "source"],
     ),
     NodeTypeSchema(
         type="load_file",
@@ -131,7 +193,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         description=(
             "Load a local file into a DataFrame. "
             "Format is inferred from the file extension: "
-            ".csv, .parquet, .xlsx, .xls."
+            ".csv, .parquet, .xlsx, .xls, .dta (Stata)."
         ),
         category="load",
         needs_template=False,
@@ -148,10 +210,11 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
                 name="format",
                 type="string",
                 required=False,
-                description="File format: 'csv', 'parquet', 'xlsx', 'xls'. Inferred from extension if omitted.",
+                description="File format: 'csv', 'parquet', 'xlsx', 'xls', 'dta'. Inferred from extension if omitted.",
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "file", "csv", "parquet", "excel", "stata", "source"],
     ),
     NodeTypeSchema(
         type="load_duckdb",
@@ -189,30 +252,102 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "duckdb", "database", "sql", "source"],
     ),
     NodeTypeSchema(
         type="push_odbc",
         label="Push to ODBC",
-        description="Write a DataFrame to a table in a named ODBC target. Not yet implemented.",
+        description=(
+            "Write a DataFrame to a table in an ODBC target. "
+            "Specify connection details inline or via a named odbc_key. "
+            "Use ${env.xxx} references for sensitive values such as passwords."
+        ),
         category="export",
         needs_template=False,
         produces_output=False,
         reads_store_inputs=True,
         fixed_params=[
             ParamSchema(
-                name="odbc_key",
-                type="string",
-                required=True,
-                description="Key into the pipeline's odbc: config block identifying the target.",
-            ),
-            ParamSchema(
                 name="table",
                 type="string",
                 required=True,
                 description="Destination table name.",
             ),
+            ParamSchema(
+                name="mode",
+                type="string",
+                required=False,
+                description="Write mode: 'replace' (default, drops and recreates) or 'append'.",
+            ),
+            ParamSchema(
+                name="schema",
+                type="string",
+                required=False,
+                description="Database schema name (e.g. 'dbo'). Omit to use the connection's default schema.",
+            ),
+            ParamSchema(
+                name="odbc_key",
+                type="string",
+                required=False,
+                description=(
+                    "Named connection from the pipeline's odbc: config block. "
+                    "If set, all inline connection params below are ignored."
+                ),
+            ),
+            ParamSchema(
+                name="connection_string",
+                type="string",
+                required=False,
+                description=(
+                    "Full ODBC connection string. "
+                    "If set, takes precedence over all other connection params."
+                ),
+            ),
+            ParamSchema(
+                name="driver",
+                type="string",
+                required=False,
+                description="ODBC driver name, e.g. 'ODBC Driver 17 for SQL Server'.",
+            ),
+            ParamSchema(
+                name="server",
+                type="string",
+                required=False,
+                description="Server hostname or IP address.",
+            ),
+            ParamSchema(
+                name="database",
+                type="string",
+                required=False,
+                description="Database name.",
+            ),
+            ParamSchema(
+                name="trusted",
+                type="boolean",
+                required=False,
+                description="Use Windows trusted authentication.",
+            ),
+            ParamSchema(
+                name="uid",
+                type="string",
+                required=False,
+                description="Username.",
+            ),
+            ParamSchema(
+                name="pwd",
+                type="password",
+                required=False,
+                description="Password. Use ${env.xxx} to avoid storing credentials in pipeline.yaml.",
+            ),
+            ParamSchema(
+                name="dsn",
+                type="string",
+                required=False,
+                description="Data Source Name (DSN).",
+            ),
         ],
         accepts_template_params=False,
+        tags=["export", "odbc", "database", "sink"],
     ),
     NodeTypeSchema(
         type="export_dta",
@@ -231,6 +366,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["export", "file", "stata", "sink"],
     ),
     NodeTypeSchema(
         type="load_internal_api",
@@ -242,6 +378,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         reads_store_inputs=False,
         fixed_params=[],
         accepts_template_params=False,
+        tags=["load", "api", "source"],
     ),
     NodeTypeSchema(
         type="load_rest_api",
@@ -312,6 +449,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["load", "api", "rest", "http", "source"],
     ),
     NodeTypeSchema(
         type="push_duckdb",
@@ -356,6 +494,7 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
             ),
         ],
         accepts_template_params=False,
+        tags=["export", "duckdb", "database", "sink"],
     ),
 ]
 

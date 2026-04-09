@@ -1,0 +1,33 @@
+order_id,date,product,category,region,quantity,unit_price,discount_pct
+1001,2024-01-08,Widget A,Electronics,North,2,49.99,10
+1002,2024-01-12,Gadget Pro,Electronics,South,1,129.99,0
+1003,2024-01-15,Basic Widget,Electronics,East,5,24.99,5
+1004,2024-01-20,Office Chair,Furniture,North,1,299.99,15
+1005,2024-01-25,Desk Lamp,Furniture,West,3,34.99,0
+1006,2024-02-03,Widget A,Electronics,South,4,49.99,10
+1007,2024-02-07,Monitor Stand,Furniture,North,2,79.99,0
+1008,2024-02-14,Gadget Pro,Electronics,East,2,129.99,5
+1009,2024-02-18,Keyboard,Electronics,West,6,59.99,10
+1010,2024-02-22,Notebook Set,Stationery,South,10,12.99,0
+1011,2024-03-01,Widget A,Electronics,North,3,49.99,0
+1012,2024-03-05,Filing Cabinet,Furniture,East,1,189.99,10
+1013,2024-03-10,Gadget Pro,Electronics,North,1,129.99,15
+1014,2024-03-15,Notebook Set,Stationery,West,20,12.99,5
+1015,2024-03-20,Desk Lamp,Furniture,South,4,34.99,0
+1016,2024-03-28,Basic Widget,Electronics,North,8,24.99,0
+1017,2024-04-02,Monitor Stand,Furniture,West,3,79.99,10
+1018,2024-04-09,Keyboard,Electronics,East,4,59.99,0
+1019,2024-04-14,Widget A,Electronics,West,6,49.99,5
+1020,2024-04-18,Office Chair,Furniture,North,2,299.99,20
+1021,2024-04-25,Gadget Pro,Electronics,South,3,129.99,0
+1022,2024-05-03,Notebook Set,Stationery,North,15,12.99,10
+1023,2024-05-07,Basic Widget,Electronics,South,10,24.99,5
+1024,2024-05-12,Desk Lamp,Furniture,East,2,34.99,15
+1025,2024-05-16,Keyboard,Electronics,North,5,59.99,10
+1026,2024-05-22,Widget A,Electronics,East,4,49.99,0
+1027,2024-05-28,Filing Cabinet,Furniture,West,2,189.99,5
+1028,2024-06-04,Gadget Pro,Electronics,North,2,129.99,10
+1029,2024-06-10,Monitor Stand,Furniture,South,4,79.99,0
+1030,2024-06-18,Notebook Set,Stationery,East,25,12.99,0
+1031,2024-06-22,Widget A,Electronics,South,5,49.99,15
+1032,2024-06-28,Office Chair,Furniture,East,1,299.99,10

@@ -18,6 +18,7 @@ spec is rewritten to ``{bundle_dir}/session.duckdb`` so the run writes there.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import shutil
@@ -83,7 +84,7 @@ def create_bundle(
             shutil.copytree(templates_src, bundle_dir / "templates", dirs_exist_ok=True)
 
     # 5. Copy all .py files from workspace → transforms/
-    _copy_transforms(workspace, bundle_dir / "transforms")
+    transform_hashes = _copy_transforms(workspace, bundle_dir / "transforms")
 
     # 6. Write manifest (timestamps filled in by caller after execution)
     manifest = {
@@ -98,6 +99,7 @@ def create_bundle(
         "python_version": platform.python_version(),
         "pipeline_core_version": _pipeline_core_version(),
         "workspace": str(workspace),
+        "transform_file_hashes": transform_hashes,
     }
     _write_manifest(bundle_dir, manifest)
 
@@ -154,7 +156,7 @@ def branch_session(
                 shutil.copytree(templates_src, bundle_dir / "templates", dirs_exist_ok=True)
 
     # 3. Copy transforms
-    _copy_transforms(workspace, bundle_dir / "transforms")
+    transform_hashes = _copy_transforms(workspace, bundle_dir / "transforms")
 
     # 4. Copy session.duckdb from source — preserves _session_nodes + _store_* tables
     source_db = source_bundle / "session.duckdb"
@@ -178,6 +180,7 @@ def branch_session(
         "python_version": platform.python_version(),
         "pipeline_core_version": _pipeline_core_version(),
         "workspace": str(workspace),
+        "transform_file_hashes": transform_hashes,
     }
     _write_manifest(bundle_dir, manifest)
 
@@ -224,9 +227,16 @@ def _make_run_id() -> str:
     return f"{ts}_{short}"
 
 
-def _copy_transforms(workspace: Path, dest: Path) -> None:
-    """Copy all .py files from workspace into dest, preserving relative paths."""
+def _copy_transforms(workspace: Path, dest: Path) -> dict[str, str]:
+    """Copy all .py files from workspace into dest, preserving relative paths.
+
+    Returns a ``{relative_path: sha256_hex}`` mapping of every file copied,
+    written into ``manifest.json`` as ``transform_file_hashes``.  This allows
+    branched sessions to detect which transforms have changed since the original
+    run and automatically mark those nodes as stale.
+    """
     dest.mkdir(parents=True, exist_ok=True)
+    hashes: dict[str, str] = {}
     for py_file in workspace.rglob("*.py"):
         # Skip files inside excluded directories
         if any(part in _SKIP_DIRS for part in py_file.relative_to(workspace).parts):
@@ -235,6 +245,10 @@ def _copy_transforms(workspace: Path, dest: Path) -> None:
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(py_file, target)
+        hashes[str(rel).replace("\\", "/")] = hashlib.sha256(
+            py_file.read_bytes()
+        ).hexdigest()
+    return hashes
 
 
 def _write_manifest(bundle_dir: Path, manifest: dict) -> None:

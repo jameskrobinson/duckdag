@@ -1,0 +1,6 @@
+-- Filter sales to orders on or after the start_date variable.
+-- Variables are injected from variables.yaml or the Run Variables modal.
+SELECT *
+FROM sales_with_revenue
+WHERE date >= '{{ start_date }}'
+ORDER BY date

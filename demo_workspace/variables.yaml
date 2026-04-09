@@ -1,0 +1,6 @@
+# Demo workspace variables — shared across pipelines.
+# Override per-machine values in env.yaml (do not commit env.yaml).
+
+start_date: "2024-01-01"
+top_n: 10
+region: "North"

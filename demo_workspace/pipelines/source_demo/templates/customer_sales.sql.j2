@@ -1,0 +1,12 @@
+-- Join sales aggregates with customer records.
+SELECT
+    c.customer_id,
+    c.customer_name,
+    c.segment,
+    s.product,
+    s.units_sold,
+    s.total_revenue
+FROM load_customers c
+LEFT JOIN query_recent_sales s
+    ON s.product IS NOT NULL
+ORDER BY c.customer_name, s.total_revenue DESC
