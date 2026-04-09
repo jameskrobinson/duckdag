@@ -1,0 +1,17 @@
+node_type: load_rest_api
+label: CoinGecko — Top 30 Coins
+description: Fetch the top 30 cryptocurrencies by market cap (no API key needed).
+params:
+  url: https://api.coingecko.com/api/v3/coins/markets
+  method: GET
+  params:
+    vs_currency: usd
+    order: market_cap_desc
+    per_page: 30
+    page: 1
+    sparkline: false
+  timeout: 20
+tags:
+  - crypto
+  - market-data
+  - rest-api

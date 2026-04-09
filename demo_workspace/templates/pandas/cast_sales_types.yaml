@@ -1,0 +1,14 @@
+node_type: pandas_transform
+label: Cast Sales Column Types
+description: Coerce order_date to datetime, quantity to int, unit_price and revenue to float.
+params:
+  transform: cleaning.coerce_types
+  casts:
+    order_date: "datetime64[ns]"
+    quantity: int
+    unit_price: float
+    revenue: float
+tags:
+  - cleaning
+  - types
+  - sales

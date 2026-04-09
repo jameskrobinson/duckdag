@@ -1,0 +1,12 @@
+node_type: pandas_transform
+label: Top 5 Products by Revenue
+description: Return the 5 highest-revenue rows, sorted descending.
+params:
+  transform: analytics.top_n
+  n: 5
+  sort_by: revenue
+  ascending: false
+tags:
+  - analytics
+  - ranking
+  - top-n

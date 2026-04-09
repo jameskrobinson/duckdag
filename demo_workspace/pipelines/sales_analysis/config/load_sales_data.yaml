@@ -1,0 +1,10 @@
+node_type: load_file
+label: Load Sales CSV
+description: Load the demo workspace sales data for this pipeline.
+params:
+  path: data/sales.csv
+  format: csv
+tags:
+  - sales
+  - local
+  - pipeline-config

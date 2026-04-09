@@ -1,0 +1,14 @@
+-- Aggregate sales by month and category.
+-- Try editing this SQL and clicking Run to preview results interactively.
+SELECT
+    strftime(date, '%Y-%m')      AS month,
+    category,
+    COUNT(*)                     AS order_count,
+    SUM(quantity)                AS units_sold,
+    ROUND(SUM(revenue), 2)       AS total_revenue,
+    ROUND(AVG(discount_pct), 1)  AS avg_discount_pct
+FROM filtered_sales
+GROUP BY
+    strftime(date, '%Y-%m'),
+    category
+ORDER BY month, total_revenue DESC

@@ -1,0 +1,19 @@
+node_type: load_rest_api
+label: Open-Meteo — Hourly Weather
+description: >
+  Fetch hourly temperature and wind-speed forecast for a location from Open-Meteo
+  (no API key needed). Adjust latitude/longitude in params to change the location.
+params:
+  url: https://api.open-meteo.com/v1/forecast
+  method: GET
+  params:
+    latitude: 51.5
+    longitude: -0.12
+    hourly: temperature_2m,windspeed_10m
+    forecast_days: 3
+  record_path: hourly
+  timeout: 15
+tags:
+  - weather
+  - rest-api
+  - time-series

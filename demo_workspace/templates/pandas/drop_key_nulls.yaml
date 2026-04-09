@@ -1,0 +1,13 @@
+node_type: pandas_transform
+label: Drop Nulls — Key Columns
+description: Drop rows where any key business columns (date, region, product) are null.
+params:
+  transform: cleaning.drop_nulls
+  columns:
+    - order_date
+    - region
+    - product
+  how: any
+tags:
+  - cleaning
+  - data-quality

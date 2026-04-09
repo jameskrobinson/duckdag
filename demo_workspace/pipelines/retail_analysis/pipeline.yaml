@@ -1,0 +1,79 @@
+# Retail Analysis Pipeline
+#
+# Demonstrates:
+#   - load_file source node
+#   - pandas_transform with workspace transform function
+#   - sql_transform nodes with pre-linked SQL template files
+#     (click any sql_transform node to see the SQL editor in the config panel)
+#   - Variable declarations with UI-editable defaults
+#   - Run history and session support
+#
+# To run: open this pipeline, click Run, explore results by clicking nodes.
+
+duckdb:
+  path: pipeline.duckdb
+
+templates:
+  dir: templates
+
+variable_declarations:
+  - name: start_date
+    type: string
+    default: "2024-01-01"
+    description: "Include orders on or after this date (YYYY-MM-DD)"
+  - name: top_n
+    type: integer
+    default: 10
+    description: "Number of top products to return"
+
+nodes:
+
+  # 1. Load raw sales data from CSV
+  - id: raw_sales
+    type: load_file
+    inputs: []
+    output: raw_sales
+    description: "Load retail sales CSV from the workspace data directory"
+    params:
+      path: ../../data/sales.csv
+
+  # 2. Add revenue column via pandas transform
+  - id: sales_with_revenue
+    type: pandas_transform
+    inputs:
+      - raw_sales
+    output: sales_with_revenue
+    description: "Add net_price and revenue columns"
+    params:
+      transform: transforms.analysis.add_revenue
+
+  # 3. Filter to the requested date range (SQL editor demo — click this node)
+  - id: filtered_sales
+    type: sql_transform
+    inputs:
+      - sales_with_revenue
+    output: filtered_sales
+    description: "Filter orders on or after start_date"
+    template: filter_by_date.sql.j2
+    params:
+      start_date: ${variables.start_date}
+
+  # 4. Monthly revenue summary (SQL editor demo — click this node)
+  - id: monthly_summary
+    type: sql_transform
+    inputs:
+      - filtered_sales
+    output: monthly_summary
+    description: "Revenue and order count aggregated by month and category"
+    template: monthly_summary.sql.j2
+
+  # 5. Top products by revenue (SQL editor demo — click this node)
+  - id: top_products
+    type: sql_transform
+    inputs:
+      - filtered_sales
+    output: top_products
+    description: "Top {{ top_n }} products by total revenue"
+    template: top_products.sql.j2
+    params:
+      top_n: ${variables.top_n}

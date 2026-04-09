@@ -1,0 +1,69 @@
+# Source Node Demo Pipeline
+#
+# Demonstrates the new SQL editor for load_duckdb and load_odbc source nodes.
+# These nodes are NOT runnable without additional infrastructure, but opening
+# them in the config panel shows the full SQL editor experience.
+#
+# What to try:
+#   1. Click the "query_recent_sales" node (load_duckdb):
+#      - See the SQL editor with a pre-written query
+#      - Edit the SQL and click Run (requires retail_analysis to have been run first
+#        so pipeline.duckdb exists)
+#
+#   2. Click the "load_customers" node (load_odbc):
+#      - See the inline connection parameters (driver, server, database, etc.)
+#      - See the SQL template editor below the connection params
+#      - Connection params support ${env.xxx} references — put sensitive values
+#        in env.yaml (not committed to git)
+#
+#   3. Click the "load_duckdb_file" node (load_duckdb with external file):
+#      - Same SQL editor, but pointing at an external .duckdb file via the path param
+
+duckdb:
+  path: pipeline.duckdb
+
+templates:
+  dir: templates
+
+nodes:
+
+  # load_duckdb — queries the retail_analysis session database.
+  # SQL is stored in a template file (templates/query_recent_sales.sql.j2).
+  # Click this node to see and edit the SQL interactively.
+  - id: query_recent_sales
+    type: load_duckdb
+    inputs: []
+    output: query_recent_sales
+    description: "Query aggregated sales from the retail_analysis DuckDB"
+    template: query_recent_sales.sql.j2
+    params:
+      path: ../retail_analysis/pipeline.duckdb
+
+  # load_odbc — connects to a SQL Server database via ODBC.
+  # Connection params are inline on the node; sensitive values reference env.yaml.
+  # SQL is stored in a template file.
+  # Click this node to see the connection params and SQL editor.
+  - id: load_customers
+    type: load_odbc
+    inputs: []
+    output: load_customers
+    description: "Load active customers from SQL Server"
+    template: load_customers.sql.j2
+    params:
+      driver: "ODBC Driver 17 for SQL Server"
+      server: "${env.sql_server}"
+      database: "sales_db"
+      trusted: false
+      uid: "${env.sql_user}"
+      pwd: "${env.sql_password}"
+      region: "${variables.region}"
+
+  # sql_transform — joins the two sources above
+  - id: customer_sales
+    type: sql_transform
+    inputs:
+      - query_recent_sales
+      - load_customers
+    output: customer_sales
+    description: "Join sales data with customer records"
+    template: customer_sales.sql.j2

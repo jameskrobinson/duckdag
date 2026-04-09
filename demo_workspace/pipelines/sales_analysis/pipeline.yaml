@@ -1,0 +1,127 @@
+name: Sales Analysis Demo
+description: >
+  Demo pipeline showing the new palette — workspace Python transforms (cleaning /
+  analytics groups), SQL templates, and pipeline-specific configs.
+  Uses the data/sales.csv sample file included in demo_workspace.
+
+duckdb:
+  path: pipeline.duckdb
+
+templates:
+  dir: templates
+
+variable_declarations:
+  - name: recent_days
+    type: integer
+    default: 90
+    description: How many days back to include in the "recent sales" filter.
+    required: false
+  - name: top_n
+    type: integer
+    default: 5
+    description: How many top products to highlight.
+    required: false
+
+nodes:
+  - id: load_sales
+    node_type: load_file
+    label: Load Sales Data
+    params:
+      path: data/sales.csv
+      format: csv
+    position: {x: 80, y: 180}
+
+  - id: cast_types
+    node_type: pandas_transform
+    label: Cast Column Types
+    params:
+      transform: cleaning.coerce_types
+      casts:
+        order_date: "datetime64[ns]"
+        quantity: int
+        unit_price: float
+        revenue: float
+    position: {x: 80, y: 320}
+    inputs:
+      - load_sales
+
+  - id: drop_nulls
+    node_type: pandas_transform
+    label: Drop Null Rows
+    params:
+      transform: cleaning.drop_nulls
+      columns: [order_date, region, product]
+      how: any
+    position: {x: 80, y: 460}
+    inputs:
+      - cast_types
+
+  - id: add_revenue
+    node_type: pandas_transform
+    label: Derive Revenue Column
+    params:
+      transform: analytics.derive_columns
+      expressions:
+        revenue: quantity * unit_price
+    position: {x: 80, y: 600}
+    inputs:
+      - drop_nulls
+
+  - id: filter_recent
+    node_type: sql_transform
+    label: Filter Recent Sales
+    template: filter_recent.sql
+    params:
+      date_column: order_date
+      days: ${variables.recent_days}
+    position: {x: 340, y: 460}
+    inputs:
+      - add_revenue
+
+  - id: monthly_summary
+    node_type: sql_transform
+    label: Monthly Revenue Rollup
+    template: monthly_rollup.sql
+    params:
+      date_col: order_date
+      value_col: revenue
+      group_col: category
+    position: {x: 340, y: 600}
+    inputs:
+      - filter_recent
+
+  - id: top_products
+    node_type: pandas_transform
+    label: Top N Products
+    params:
+      transform: analytics.top_n
+      n: ${variables.top_n}
+      sort_by: revenue
+      ascending: false
+      partition_by: category
+    position: {x: 600, y: 460}
+    inputs:
+      - add_revenue
+
+  - id: rank_products
+    node_type: pandas_transform
+    label: Add Product Rank
+    params:
+      transform: analytics.add_rank
+      column: revenue
+      rank_column: revenue_rank
+      ascending: false
+      group_by: category
+    position: {x: 600, y: 600}
+    inputs:
+      - top_products
+
+  - id: save_summary
+    node_type: push_duckdb
+    label: Save Monthly Summary
+    params:
+      table: monthly_summary
+      mode: replace
+    position: {x: 340, y: 740}
+    inputs:
+      - monthly_summary
