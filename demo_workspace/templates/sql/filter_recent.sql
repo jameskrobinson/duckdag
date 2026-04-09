@@ -1,4 +1,4 @@
--- Filter rows to only those within the last N days.
+-- Filter rows to only those within the last N days
 -- Params: date_column (default: order_date), days (default: 90)
 SELECT *
 FROM {{ input }}

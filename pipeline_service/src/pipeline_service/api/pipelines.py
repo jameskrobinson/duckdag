@@ -121,16 +121,33 @@ def get_dag(body: DagRequest) -> DagResponse:
 
     Nodes are positioned using a simple level-based layout (depth in the DAG
     determines the x-axis; the builder's layout engine can override positions).
+
+    When ``${env.*}`` (or other) references cannot be resolved, the endpoint
+    falls back to lenient mode: unresolvable placeholders are left as-is and
+    returned as *warnings* in the response rather than raising a 422 error.
     """
     env = yaml.safe_load(body.env_yaml) if body.env_yaml else None
     variables = yaml.safe_load(body.variables_yaml) if body.variables_yaml else None
+    dag_warnings: list[str] = []
     try:
         spec = resolve_pipeline_from_str(body.pipeline_yaml, env=env, variables=variables)
-    except (ValueError, KeyError, ValidationError) as exc:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail=str(exc))
+    except (ValueError, KeyError, ValidationError) as strict_exc:
+        # Strict resolution failed — retry in lenient mode so the canvas still loads.
+        try:
+            spec = resolve_pipeline_from_str(
+                body.pipeline_yaml,
+                env=env,
+                variables=variables,
+                strict=False,
+                warnings=dag_warnings,
+            )
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        # If lenient parsing produced no warnings (shouldn't happen), surface the original error.
+        if not dag_warnings:
+            dag_warnings.append(str(strict_exc))
 
-    return _spec_to_dag_response(spec.nodes, pipeline_schema=spec.pipeline_schema)
+    return _spec_to_dag_response(spec.nodes, pipeline_schema=spec.pipeline_schema, warnings=dag_warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +157,7 @@ def get_dag(body: DagRequest) -> DagResponse:
 def _spec_to_dag_response(
     nodes: list[NodeSpec],
     pipeline_schema: dict[str, NodeOutputSchema] | None = None,
+    warnings: list[str] | None = None,
 ) -> DagResponse:
     output_map = _build_output_map(nodes)          # output_name → node_id
     topo_order = _topological_sort(nodes, output_map)
@@ -203,7 +221,7 @@ def _spec_to_dag_response(
                         )
                     )
 
-    return DagResponse(nodes=rf_nodes, edges=rf_edges)
+    return DagResponse(nodes=rf_nodes, edges=rf_edges, warnings=warnings or [])
 
 
 # ---------------------------------------------------------------------------

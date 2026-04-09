@@ -49,6 +49,9 @@ class PaletteConfig(BaseModel):
     template_path: str | None = None
     sql_preview: str | None = None
     tags: list[str] = []
+    companion_files: dict[str, str] = {}
+    """Additional files bundled with this preset (param → relative file path).
+    Passed through from the source :class:`NodeTemplate`."""
 
 
 class PaletteFunction(BaseModel):
@@ -106,6 +109,18 @@ def _kind_for(nt: NodeTypeSchema) -> Literal["source", "transform", "sink"]:
     return "transform"
 
 
+def _transform_matches(tmpl_transform: object, full_path: str) -> bool:
+    """Return True if a template's ``transform`` param refers to *full_path*.
+
+    Accepts both exact matches (``pipeline_core.transforms.basic.select_rename``)
+    and short suffix matches (``cleaning.drop_nulls`` vs
+    ``transforms.cleaning.drop_nulls``).
+    """
+    if not isinstance(tmpl_transform, str):
+        return False
+    return tmpl_transform == full_path or full_path.endswith(f".{tmpl_transform}")
+
+
 def _origin_for(tmpl: NodeTemplate) -> Literal["builtin", "workspace", "pipeline"]:
     if tmpl.scope == "common":
         return "builtin"
@@ -125,6 +140,7 @@ def _tmpl_to_config(tmpl: NodeTemplate) -> PaletteConfig:
         template_path=tmpl.template_path,
         sql_preview=tmpl.sql_preview,
         tags=tmpl.tags,
+        companion_files=tmpl.companion_files,
     )
 
 
@@ -200,10 +216,11 @@ def get_palette(workspace: str | None = None) -> PaletteResponse:
         pandas_tmpls = templates_by_type.get("pandas_transform", [])
         fns: list[PaletteFunction] = []
         for entry in cat.transforms:
-            # Attach only presets that reference exactly this function via the 'transform' param
+            # Attach presets that reference this function via the 'transform' param.
+            # Accepts both full paths and short "module.function" suffixes.
             fn_configs = [
                 _tmpl_to_config(t) for t in pandas_tmpls
-                if t.params.get("transform") == entry.full_path
+                if _transform_matches(t.params.get("transform"), entry.full_path)
             ]
             origin: Literal["builtin", "workspace", "pipeline"] = (
                 "pipeline" if cat.scope == "pipeline"

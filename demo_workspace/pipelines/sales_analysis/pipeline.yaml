@@ -24,7 +24,7 @@ variable_declarations:
 
 nodes:
   - id: load_sales
-    node_type: load_file
+    type: load_file
     label: Load Sales Data
     params:
       path: data/sales.csv
@@ -32,7 +32,7 @@ nodes:
     position: {x: 80, y: 180}
 
   - id: cast_types
-    node_type: pandas_transform
+    type: pandas_transform
     label: Cast Column Types
     params:
       transform: cleaning.coerce_types
@@ -46,7 +46,7 @@ nodes:
       - load_sales
 
   - id: drop_nulls
-    node_type: pandas_transform
+    type: pandas_transform
     label: Drop Null Rows
     params:
       transform: cleaning.drop_nulls
@@ -57,7 +57,7 @@ nodes:
       - cast_types
 
   - id: add_revenue
-    node_type: pandas_transform
+    type: pandas_transform
     label: Derive Revenue Column
     params:
       transform: analytics.derive_columns
@@ -68,7 +68,7 @@ nodes:
       - drop_nulls
 
   - id: filter_recent
-    node_type: sql_transform
+    type: sql_transform
     label: Filter Recent Sales
     template: filter_recent.sql
     params:
@@ -79,7 +79,7 @@ nodes:
       - add_revenue
 
   - id: monthly_summary
-    node_type: sql_transform
+    type: sql_transform
     label: Monthly Revenue Rollup
     template: monthly_rollup.sql
     params:
@@ -91,7 +91,7 @@ nodes:
       - filter_recent
 
   - id: top_products
-    node_type: pandas_transform
+    type: pandas_transform
     label: Top N Products
     params:
       transform: analytics.top_n
@@ -104,7 +104,7 @@ nodes:
       - add_revenue
 
   - id: rank_products
-    node_type: pandas_transform
+    type: pandas_transform
     label: Add Product Rank
     params:
       transform: analytics.add_rank
@@ -117,7 +117,7 @@ nodes:
       - top_products
 
   - id: save_summary
-    node_type: push_duckdb
+    type: push_duckdb
     label: Save Monthly Summary
     params:
       table: monthly_summary

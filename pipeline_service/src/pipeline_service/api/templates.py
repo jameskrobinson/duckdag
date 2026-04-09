@@ -47,6 +47,11 @@ class NodeTemplate(BaseModel):
     """Declared category for SQL templates — groups them into a synthetic Transforms group
     in the palette (e.g. 'Finance', 'Analytics'). Declared via a ``-- category: X`` front-matter
     comment at the top of the .sql file."""
+    companion_files: dict[str, str] = {}
+    """Additional files associated with this template, keyed by param name.
+    Maps a node param (e.g. ``'query'``) to a file path relative to the workspace templates dir.
+    Example: ``{'query': 'my_odbc_query.sql.j2'}`` for an ODBC template that pairs a YAML config
+    with a separate SQL file."""
 
 
 # ---------------------------------------------------------------------------

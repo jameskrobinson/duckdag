@@ -139,3 +139,6 @@ class ReactFlowEdge(BaseModel):
 class DagResponse(BaseModel):
     nodes: list[ReactFlowNode]
     edges: list[ReactFlowEdge]
+    warnings: list[str] = []
+    """Non-fatal issues — e.g. unresolved ${env.*} references that couldn't be
+    substituted because the env.yaml is absent or incomplete."""

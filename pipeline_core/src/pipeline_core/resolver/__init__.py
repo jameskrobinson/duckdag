@@ -132,6 +132,8 @@ def resolve_pipeline_from_str(
     *,
     env: dict[str, Any] | None = None,
     variables: dict[str, Any] | None = None,
+    strict: bool = True,
+    warnings: list[str] | None = None,
 ) -> PipelineSpec:
     """Resolve a pipeline spec from a raw YAML string.
 
@@ -142,12 +144,16 @@ def resolve_pipeline_from_str(
         pipeline_yaml: Raw YAML content of the pipeline file.
         env: Optional pre-loaded environment dict.
         variables: Optional pre-loaded variables dict.
+        strict: If ``False``, unresolvable ``${...}`` references are left as-is
+                rather than raising ``KeyError``.
+        warnings: Optional list to collect unresolved reference messages when
+                  ``strict=False``.
 
     Returns:
         A validated :class:`PipelineSpec` with all ``${...}`` references resolved.
     """
     raw = yaml.safe_load(pipeline_yaml) or {}
-    resolved = resolve_variables(raw, env=env, variables=variables)
+    resolved = resolve_variables(raw, env=env, variables=variables, strict=strict, warnings=warnings)
     spec = PipelineSpec.model_validate(resolved)
     if variables:
         spec = spec.model_copy(update={"variables": variables})
