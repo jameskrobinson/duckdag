@@ -154,6 +154,100 @@ def get_dag(body: DagRequest) -> DagResponse:
 # DAG layout helpers
 # ---------------------------------------------------------------------------
 
+def _hierarchical_layout(
+    nodes: list[NodeSpec],
+    output_map: dict[str, str],
+    topo_order: list[str],
+    x_gap: int = 260,
+    y_gap: int = 110,
+) -> dict[str, tuple[float, float]]:
+    """Compute node positions using a Sugiyama-style hierarchical layout.
+
+    Steps:
+    1. Level assignment — longest path from sources (nodes with no inputs = level 0).
+    2. Barycenter ordering — multiple forward + backward passes to minimise edge crossings.
+    3. Coordinate assignment — nodes centred vertically within each column.
+    """
+    if not nodes:
+        return {}
+
+    node_by_id = {n.id: n for n in nodes}
+    topo_rank = {n: i for i, n in enumerate(topo_order)}
+
+    # --- Step 1: Level assignment (longest path from sources) ---
+    levels: dict[str, int] = {}
+    for node_id in topo_order:
+        node = node_by_id[node_id]
+        if not node.inputs:
+            levels[node_id] = 0
+        else:
+            parent_lvls = [
+                levels[output_map[inp]]
+                for inp in node.inputs
+                if inp in output_map and output_map[inp] in levels
+            ]
+            levels[node_id] = (max(parent_lvls) + 1) if parent_lvls else 0
+
+    # Group nodes by level; seed order from topological sort
+    level_nodes: dict[int, list[str]] = {}
+    for node_id in topo_order:
+        lvl = levels[node_id]
+        level_nodes.setdefault(lvl, []).append(node_id)
+
+    # Build parent → children adjacency
+    children: dict[str, list[str]] = {n.id: [] for n in nodes}
+    for node in nodes:
+        for inp in node.inputs:
+            if inp in output_map:
+                parent = output_map[inp]
+                if parent in children:
+                    children[parent].append(node.id)
+
+    max_lvl = max(level_nodes) if level_nodes else 0
+
+    # --- Step 2: Barycenter ordering (3 sweep pairs) ---
+    def _barycenter_pass(forward: bool) -> None:
+        lvl_range = range(1, max_lvl + 1) if forward else range(max_lvl - 1, -1, -1)
+        for lvl in lvl_range:
+            if lvl not in level_nodes:
+                continue
+            ref_lvl = lvl - 1 if forward else lvl + 1
+            if ref_lvl not in level_nodes:
+                continue
+            ref_pos: dict[str, float] = {
+                nid: float(i) for i, nid in enumerate(level_nodes[ref_lvl])
+            }
+
+            def score(node_id: str) -> float:
+                node = node_by_id[node_id]
+                if forward:
+                    refs = [ref_pos[output_map[inp]] for inp in node.inputs
+                            if inp in output_map and output_map[inp] in ref_pos]
+                else:
+                    refs = [ref_pos[c] for c in children[node_id] if c in ref_pos]
+                if refs:
+                    return sum(refs) / len(refs)
+                # Fallback: preserve existing relative order
+                return float(topo_rank.get(node_id, 0))
+
+            level_nodes[lvl].sort(key=score)
+
+    for _ in range(3):
+        _barycenter_pass(forward=True)
+        _barycenter_pass(forward=False)
+
+    # --- Step 3: Coordinate assignment ---
+    # Each level is centred vertically; nodes are evenly spaced.
+    positions: dict[str, tuple[float, float]] = {}
+    for lvl, node_list in level_nodes.items():
+        count = len(node_list)
+        top = -((count - 1) * y_gap) / 2.0
+        for i, node_id in enumerate(node_list):
+            positions[node_id] = (lvl * x_gap, top + i * y_gap)
+
+    return positions
+
+
 def _spec_to_dag_response(
     nodes: list[NodeSpec],
     pipeline_schema: dict[str, NodeOutputSchema] | None = None,
@@ -164,30 +258,13 @@ def _spec_to_dag_response(
     node_by_id = {n.id: n for n in nodes}
     schema = pipeline_schema or {}
 
-    # Compute DAG depth (level) for each node in topo order so parents are
-    # always resolved before children.
-    levels: dict[str, int] = {}
-    for node_id in topo_order:
-        node = node_by_id[node_id]
-        if not node.inputs:
-            levels[node_id] = 0
-        else:
-            parent_levels = [
-                levels[output_map[inp]]
-                for inp in node.inputs
-                if inp in output_map
-            ]
-            levels[node_id] = max(parent_levels, default=0) + 1
+    positions = _hierarchical_layout(nodes, output_map, topo_order)
 
-    # Assign y positions by counting nodes per level.
-    level_index: dict[int, int] = {}
     rf_nodes: list[ReactFlowNode] = []
     for node_id in topo_order:
         node = node_by_id[node_id]
-        level = levels[node_id]
-        idx = level_index.get(level, 0)
-        level_index[level] = idx + 1
         node_schema = schema.get(node_id)
+        x, y = positions.get(node_id, (0.0, 0.0))
         rf_nodes.append(
             ReactFlowNode(
                 id=node_id,
@@ -197,7 +274,7 @@ def _spec_to_dag_response(
                     description=node.description,
                     output_schema=node_schema.columns if node_schema else None,
                 ),
-                position=ReactFlowPosition(x=level * 250, y=idx * 120),
+                position=ReactFlowPosition(x=x, y=y),
             )
         )
 

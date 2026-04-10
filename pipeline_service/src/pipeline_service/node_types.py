@@ -438,14 +438,108 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
     NodeTypeSchema(
         type="load_internal_api",
         label="Load from InternalAPI",
-        description="Load data from an InternalAPI source. Not yet implemented.",
+        description=(
+            "Fetch data from an internal REST API and load the result as a DataFrame. "
+            "Supports Bearer token, API key, and Basic auth. "
+            "Use record_path to drill into nested JSON responses."
+        ),
         category="load",
         needs_template=False,
         produces_output=True,
         reads_store_inputs=False,
-        fixed_params=[],
+        fixed_params=[
+            ParamSchema(
+                name="url",
+                type="string",
+                required=True,
+                description="The endpoint URL.",
+            ),
+            ParamSchema(
+                name="method",
+                type="string",
+                required=False,
+                description='HTTP method: "GET" or "POST". Defaults to "GET".',
+                default="GET",
+            ),
+            ParamSchema(
+                name="auth_type",
+                type="string",
+                required=False,
+                description=(
+                    'Authentication type: "none" (default), "bearer" (Authorization: Bearer <token>), '
+                    '"api_key" (custom header), or "basic" (username/password).'
+                ),
+                default="none",
+            ),
+            ParamSchema(
+                name="auth_token",
+                type="password",
+                required=False,
+                description="Bearer token or API key value.",
+            ),
+            ParamSchema(
+                name="auth_header",
+                type="string",
+                required=False,
+                description='Header name for api_key auth. Defaults to "X-API-Key".',
+                default="X-API-Key",
+            ),
+            ParamSchema(
+                name="username",
+                type="string",
+                required=False,
+                description="Username for basic auth.",
+            ),
+            ParamSchema(
+                name="password",
+                type="password",
+                required=False,
+                description="Password for basic auth.",
+            ),
+            ParamSchema(
+                name="headers",
+                type="dict",
+                required=False,
+                description="Additional HTTP headers as a dict.",
+            ),
+            ParamSchema(
+                name="params",
+                type="dict",
+                required=False,
+                description="URL query parameters as a dict.",
+            ),
+            ParamSchema(
+                name="body",
+                type="dict",
+                required=False,
+                description="JSON request body (used for POST requests).",
+            ),
+            ParamSchema(
+                name="record_path",
+                type="string",
+                required=False,
+                description=(
+                    'Dotted key path into the JSON response to the list of records, '
+                    'e.g. "data.items". If omitted the response root must be a list or dict.'
+                ),
+            ),
+            ParamSchema(
+                name="timeout",
+                type="integer",
+                required=False,
+                description="Request timeout in seconds.",
+                default=30,
+            ),
+            ParamSchema(
+                name="verify_ssl",
+                type="boolean",
+                required=False,
+                description="Verify SSL certificates.",
+                default=True,
+            ),
+        ],
         accepts_template_params=False,
-        tags=["load", "api", "source"],
+        tags=["load", "api", "source", "internal", "rest", "http"],
     ),
     NodeTypeSchema(
         type="load_rest_api",

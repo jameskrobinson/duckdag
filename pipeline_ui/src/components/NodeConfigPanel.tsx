@@ -579,6 +579,11 @@ export default function NodeConfigPanel({
                     {MDX_NODE_TYPES.has(data.node_type) ? 'MDX' : 'SQL'} will be saved to a new file in <span style={styles.saveToFilePath}>templates/</span> on first Save.
                   </div>
                 )}
+                {isSqlParamNode && params.query && !saveToFilePrompt && (
+                  <div style={styles.sqlInlineHint}>
+                    SQL is stored inline in the pipeline YAML. Click <strong>Save</strong> to move it to a template file.
+                  </div>
+                )}
                 <SqlEditor
                   value={sqlContent}
                   onChange={handleSqlChange}
@@ -1542,6 +1547,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sqlHint: { fontSize: 11, color: '#45475a', fontStyle: 'italic' },
   sqlNewFileHint: { fontSize: 10, color: '#6c7086', fontStyle: 'italic', marginBottom: 4 },
+  sqlInlineHint: { fontSize: 11, color: '#f9e2af', background: '#f9e2af11', border: '1px solid #f9e2af33', borderRadius: 4, padding: '4px 8px', marginBottom: 4 },
   saveToFilePrompt: {
     background: '#181825', border: '1px solid #313244', borderRadius: 6,
     padding: '10px 12px', marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 6,

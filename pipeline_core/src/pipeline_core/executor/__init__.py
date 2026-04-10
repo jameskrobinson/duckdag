@@ -732,9 +732,91 @@ def _handle_load_internal_api(
     store: IntermediateStore,
     templates_dir: Path | None,
 ) -> None:
-    raise NotImplementedError(
-        f"Node '{node.id}' (load_internal_api): not implemented in pipeline_core"
+    """Fetch data from an internal REST API and load the result as a DataFrame.
+
+    Extends load_rest_api with first-class authentication support:
+
+    auth_type options:
+        - ``"none"`` (default): no authentication.
+        - ``"bearer"``: adds ``Authorization: Bearer <auth_token>`` header.
+        - ``"api_key"``: adds ``<auth_header>: <auth_token>`` header
+          (auth_header defaults to ``"X-API-Key"``).
+        - ``"basic"``: HTTP Basic auth using ``username`` / ``password`` params.
+
+    All other params (url, method, headers, params, body, record_path, timeout,
+    verify_ssl) behave identically to load_rest_api.
+    """
+    import requests  # type: ignore[import-untyped]
+
+    url: str = node.params.get("url", "")
+    if not url:
+        raise ValueError(f"Node '{node.id}' (load_internal_api): missing 'url' param")
+
+    method: str = str(node.params.get("method", "GET")).upper()
+    headers: dict = dict(node.params.get("headers") or {})
+    query_params: dict = node.params.get("params") or {}
+    body: dict | None = node.params.get("body")
+    timeout: int = int(node.params.get("timeout", 30))
+    verify_ssl: bool = bool(node.params.get("verify_ssl", True))
+    record_path = node.params.get("record_path")
+
+    # --- Auth ---
+    auth_type: str = str(node.params.get("auth_type", "none")).lower()
+    auth: tuple[str, str] | None = None
+
+    if auth_type == "bearer":
+        token = node.params.get("auth_token") or ""
+        if not token:
+            raise ValueError(f"Node '{node.id}' (load_internal_api): 'auth_token' is required for bearer auth")
+        headers["Authorization"] = f"Bearer {token}"
+    elif auth_type == "api_key":
+        token = node.params.get("auth_token") or ""
+        if not token:
+            raise ValueError(f"Node '{node.id}' (load_internal_api): 'auth_token' is required for api_key auth")
+        header_name: str = str(node.params.get("auth_header") or "X-API-Key")
+        headers[header_name] = token
+    elif auth_type == "basic":
+        username: str = str(node.params.get("username") or "")
+        password: str = str(node.params.get("password") or "")
+        auth = (username, password)
+
+    resp = requests.request(
+        method,
+        url,
+        headers=headers,
+        params=query_params,
+        json=body if body else None,
+        auth=auth,
+        timeout=timeout,
+        verify=verify_ssl,
     )
+    resp.raise_for_status()
+    payload = resp.json()
+
+    # Navigate to the records list if record_path is given
+    if record_path is not None:
+        if isinstance(record_path, str):
+            record_path = record_path.split(".")
+        for key in record_path:
+            if not isinstance(payload, dict) or key not in payload:
+                raise ValueError(
+                    f"Node '{node.id}' (load_internal_api): key '{key}' not found in response "
+                    f"while traversing record_path"
+                )
+            payload = payload[key]
+
+    if isinstance(payload, list):
+        result_df = pd.DataFrame(payload)
+    elif isinstance(payload, dict):
+        result_df = pd.DataFrame([payload])
+    else:
+        raise ValueError(
+            f"Node '{node.id}' (load_internal_api): expected a list or dict at the record "
+            f"path, got {type(payload).__name__}"
+        )
+
+    if node.output is not None:
+        store.put(node.output, result_df)
 
 
 _HANDLERS: dict[str, _Handler] = {

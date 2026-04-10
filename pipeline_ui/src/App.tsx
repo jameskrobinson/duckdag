@@ -8,6 +8,7 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type Edge,
   type OnConnect,
@@ -55,6 +56,7 @@ function nextId() { return `node_${++_idCounter}` }
 type PipelineNode = Node<BuilderNodeData>
 
 export default function App() {
+  const { screenToFlowPosition } = useReactFlow()
   const [nodes, setNodes, onNodesChange] = useNodesState<PipelineNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -318,10 +320,8 @@ export default function App() {
       _templateFile?: string
       _templatePath?: string
     }
-    const rect = reactFlowWrapper.current?.getBoundingClientRect()
-    if (!rect) return
-
-    const position = { x: e.clientX - rect.left - 90, y: e.clientY - rect.top - 40 }
+    // Convert screen coordinates to flow coordinates, accounting for pan and zoom.
+    const position = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const id = nextId()
     const defaultParams = payload._defaultParams ?? {}
 
