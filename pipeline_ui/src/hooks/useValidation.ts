@@ -14,6 +14,7 @@ export function useValidation(
   debounceMs = 800,
   pipelineDir?: string | null,
   workspace?: string | null,
+  envYaml?: string,
 ) {
   const [errors, setErrors] = useState<string[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
@@ -27,7 +28,7 @@ export function useValidation(
       try {
         const result = await validatePipeline(
           pipelineJson,
-          undefined,
+          envYaml,
           variablesYaml,
           pipelineDir ?? undefined,
           workspace ?? undefined,
@@ -42,7 +43,7 @@ export function useValidation(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [pipelineJson, variablesYaml, debounceMs, pipelineDir, workspace])
+  }, [pipelineJson, variablesYaml, envYaml, debounceMs, pipelineDir, workspace])
 
   return { errors, warnings }
 }

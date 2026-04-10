@@ -236,6 +236,8 @@ export default function App() {
   const [pipelineDir, setPipelineDir] = useState<string | null>(null)
   /** Raw YAML string from variables.yaml — passed to all service calls */
   const [variablesYaml, setVariablesYaml] = useState<string | null>(null)
+  /** Raw YAML string from env.yaml — passed to all service calls */
+  const [envYaml, setEnvYaml] = useState<string | null>(null)
   /** Variable declarations from the loaded pipeline.yaml (variable_declarations block) */
   const [variableDeclarations, setVariableDeclarations] = useState<VariableDeclaration[]>([])
   /** Pipeline-level default chart config — read from default_chart: in pipeline.yaml */
@@ -248,21 +250,17 @@ export default function App() {
   /** Absolute path to the shadow YAML file, derived when pipeline is loaded */
   const shadowYamlPathRef = useRef<string | null>(null)
 
-  // Variables — load variables.yaml content whenever workspace changes
+  // Variables + env — load both whenever workspace changes
   useEffect(() => {
-    if (!workspace) { setVariablesYaml(null); return }
+    if (!workspace) { setVariablesYaml(null); setEnvYaml(null); return }
     fetchWorkspaceVariables(workspace)
       .then((data) => {
-        if (Object.keys(data.variables).length > 0) {
-          // Re-serialise to YAML for the service
-          import('js-yaml').then((yamlLib) => {
-            setVariablesYaml(yamlLib.dump(data.variables))
-          })
-        } else {
-          setVariablesYaml(null)
-        }
+        import('js-yaml').then((yamlLib) => {
+          setVariablesYaml(Object.keys(data.variables).length > 0 ? yamlLib.dump(data.variables) : null)
+          setEnvYaml(Object.keys(data.env).length > 0 ? yamlLib.dump(data.env) : null)
+        })
       })
-      .catch(() => setVariablesYaml(null))
+      .catch(() => { setVariablesYaml(null); setEnvYaml(null) })
   }, [workspace])
 
   // Pipeline-local templates — derived from current canvas nodes so every
@@ -395,16 +393,21 @@ export default function App() {
       fetchVariableDeclarations(fullPath).then(setVariableDeclarations).catch(() => setVariableDeclarations([]))
       fetchGitStatus(fullPath).then((s) => setHasUncommittedChanges(s.has_uncommitted_changes)).catch(() => setHasUncommittedChanges(false))
 
-      // Load variables now (not via the workspace useEffect) so they are available
+      // Load variables + env now (not via the workspace useEffect) so they are available
       // for fetchDag below — the useEffect may not have completed yet.
       let loadedVariablesYaml: string | null = null
+      let loadedEnvYaml: string | null = null
       if (workspace) {
         try {
           const varData = await fetchWorkspaceVariables(workspace)
+          const yamlLib = await import('js-yaml')
           if (Object.keys(varData.variables).length > 0) {
-            const yamlLib = await import('js-yaml')
             loadedVariablesYaml = yamlLib.dump(varData.variables)
             setVariablesYaml(loadedVariablesYaml)
+          }
+          if (Object.keys(varData.env).length > 0) {
+            loadedEnvYaml = yamlLib.dump(varData.env)
+            setEnvYaml(loadedEnvYaml)
           }
         } catch { /* non-fatal */ }
       }
@@ -462,8 +465,12 @@ export default function App() {
         }
       }
 
-      // Get DAG layout from service — pass variables so ${variables.*} refs resolve cleanly
-      const dag = await fetchDag(yamlText, undefined, loadedVariablesYaml ?? variablesYaml ?? undefined)
+      // Get DAG layout from service — pass variables + env so all ${...} refs resolve cleanly
+      const dag = await fetchDag(
+        yamlText,
+        loadedEnvYaml ?? envYaml ?? undefined,
+        loadedVariablesYaml ?? variablesYaml ?? undefined,
+      )
 
       // Clear canvas and rebuild from DAG
       setSelectedNodeId(null)
@@ -713,7 +720,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   async function handlePreviewNode(nodeId: string, limit?: number, whereClause?: string): Promise<NodePreviewResponse> {
-    return previewNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, limit ?? 1000, variablesYaml ?? undefined, workspace || undefined, activeSession?.bundle_path ?? undefined, undefined, whereClause)
+    return previewNode(currentPipelineJson, nodeId, envYaml ?? undefined, pipelineDir ?? undefined, limit ?? 1000, variablesYaml ?? undefined, workspace || undefined, activeSession?.bundle_path ?? undefined, undefined, whereClause)
   }
 
   async function handleRunSqlDraft(nodeId: string, sqlOverride: string): Promise<NodePreviewResponse> {
@@ -724,7 +731,7 @@ export default function App() {
       throw new Error('SQL Run requires an active session with completed upstream nodes. Start a session first (▶ Run), then use Run here.')
     }
     const bundlePath = hasInputs ? (activeSession?.bundle_path ?? undefined) : undefined
-    return previewNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, 200, variablesYaml ?? undefined, workspace || undefined, bundlePath, sqlOverride)
+    return previewNode(currentPipelineJson, nodeId, envYaml ?? undefined, pipelineDir ?? undefined, 200, variablesYaml ?? undefined, workspace || undefined, bundlePath, sqlOverride)
   }
 
   async function handleFetchLineage(nodeId: string) {
@@ -830,7 +837,7 @@ export default function App() {
   }
 
   async function handleExecuteNode(nodeId: string) {
-    const result = await executeNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, variablesYaml ?? undefined, workspace || undefined, activeSession?.bundle_path ?? undefined)
+    const result = await executeNode(currentPipelineJson, nodeId, envYaml ?? undefined, pipelineDir ?? undefined, variablesYaml ?? undefined, workspace || undefined, activeSession?.bundle_path ?? undefined)
 
     setNodes((nds) =>
       nds.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, output_schema: result.columns } } : n),
@@ -936,6 +943,7 @@ export default function App() {
       try {
         const session = await createSession(currentPipelineJson, workspace, {
           pipeline_path: pipelineFilePath || undefined,
+          env_yaml: envYaml ?? undefined,
           variables_yaml: varsYaml,
         })
         setActiveSession(session)
@@ -952,6 +960,7 @@ export default function App() {
     // No workspace — fall back to ad-hoc run
     try {
       const run = await createRun(currentPipelineJson, {
+        env_yaml: envYaml ?? undefined,
         variables_yaml: varsYaml,
       })
       setActiveRun(run)
@@ -1149,6 +1158,7 @@ export default function App() {
       const run = await createRun(currentPipelineJson, {
         workspace: workspace || undefined,
         pipeline_path: pipelineFilePath || pipelineDir || undefined,
+        env_yaml: envYaml ?? undefined,
         variables_yaml: variablesYaml ?? undefined,
         completed_nodes: upstreamIds,
       })
@@ -1181,7 +1191,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   const currentPipelineJson = useMemo(() => buildPipelineJson(nodes, edges, variableDeclarations), [nodes, edges, variableDeclarations])
-  const { errors: validationErrors, warnings: validationWarnings } = useValidation(currentPipelineJson, variablesYaml ?? undefined, 800, pipelineDir, workspace)
+  const { errors: validationErrors, warnings: validationWarnings } = useValidation(currentPipelineJson, variablesYaml ?? undefined, 800, pipelineDir, workspace, envYaml ?? undefined)
 
   /** Node IDs currently flagged stale on the canvas — sent to the service on re-execute */
   const staleNodeIds = useMemo(() => nodes.filter((n) => n.data.stale).map((n) => n.id), [nodes])
