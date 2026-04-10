@@ -592,14 +592,14 @@ export default function App() {
     )
     setNodes(updatedNodes)
     if (!pipelineFilePath) return
-    const pipelineObj = buildPipelineObject(updatedNodes, edges, defaultChartConfig)
+    const pipelineObj = buildPipelineObject(updatedNodes, edges, defaultChartConfig, variableDeclarations)
     await writeWorkspaceFile(pipelineFilePath, yaml.dump(pipelineObj, { lineWidth: 120 })).catch((e) => alert(`Failed to save: ${e}`))
   }
 
   async function handleSaveChartAsDefault(config: ChartConfig) {
     setDefaultChartConfig(config)
     if (!pipelineFilePath) return
-    const pipelineObj = buildPipelineObject(nodes, edges, config)
+    const pipelineObj = buildPipelineObject(nodes, edges, config, variableDeclarations)
     await writeWorkspaceFile(pipelineFilePath, yaml.dump(pipelineObj, { lineWidth: 120 })).catch((e) => alert(`Failed to save: ${e}`))
   }
 
@@ -859,7 +859,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
 
   function savePipeline() {
-    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig)
+    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig, variableDeclarations)
     downloadText('pipeline.yaml', yaml.dump(pipelineObj, { lineWidth: 120 }))
 
     const schema: Record<string, unknown> = {}
@@ -873,7 +873,7 @@ export default function App() {
 
   async function saveToWorkspace() {
     if (!pipelineFilePath) return
-    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig)
+    const pipelineObj = buildPipelineObject(nodes, edges, defaultChartConfig, variableDeclarations)
     const yamlText = yaml.dump(pipelineObj, { lineWidth: 120 })
     try {
       await writeWorkspaceFile(pipelineFilePath, yamlText)
@@ -1159,14 +1159,14 @@ export default function App() {
 
   const previewYaml = useMemo(() => {
     if (!yamlPreviewOpen) return ''
-    return yaml.dump(buildPipelineObject(nodes, edges, defaultChartConfig), { lineWidth: 120 })
+    return yaml.dump(buildPipelineObject(nodes, edges, defaultChartConfig, variableDeclarations), { lineWidth: 120 })
   }, [yamlPreviewOpen, nodes, edges, defaultChartConfig])
 
   // ---------------------------------------------------------------------------
   // Validation (debounced, runs on every canvas change)
   // ---------------------------------------------------------------------------
 
-  const currentPipelineJson = useMemo(() => buildPipelineJson(nodes, edges), [nodes, edges])
+  const currentPipelineJson = useMemo(() => buildPipelineJson(nodes, edges, variableDeclarations), [nodes, edges, variableDeclarations])
   const { errors: validationErrors, warnings: validationWarnings } = useValidation(currentPipelineJson, variablesYaml ?? undefined, 800, pipelineDir, workspace)
 
   /** Node IDs currently flagged stale on the canvas — sent to the service on re-execute */
@@ -1527,7 +1527,12 @@ export default function App() {
 // Pipeline serialisation helpers
 // ---------------------------------------------------------------------------
 
-function buildPipelineObject(nodes: Node<BuilderNodeData>[], edges: Edge[], defaultChartConfig?: ChartConfig) {
+function buildPipelineObject(
+  nodes: Node<BuilderNodeData>[],
+  edges: Edge[],
+  defaultChartConfig?: ChartConfig,
+  variableDeclarations?: import('./types').VariableDeclaration[],
+) {
   const inputMap: Record<string, string[]> = {}
   for (const edge of edges) {
     if (!inputMap[edge.target]) inputMap[edge.target] = []
@@ -1552,12 +1557,15 @@ function buildPipelineObject(nodes: Node<BuilderNodeData>[], edges: Edge[], defa
   const hasTemplates = nodes.some((n) => n.data.template_file)
   const templatesSection = hasTemplates ? { templates: { dir: 'templates' } } : {}
   const defaultChartSection = defaultChartConfig ? { default_chart: defaultChartConfig } : {}
-  return { duckdb: { path: 'pipeline.duckdb' }, ...defaultChartSection, ...templatesSection, nodes: nodeSpecs }
+  const declSection = variableDeclarations && variableDeclarations.length > 0
+    ? { variable_declarations: variableDeclarations }
+    : {}
+  return { duckdb: { path: 'pipeline.duckdb' }, ...defaultChartSection, ...templatesSection, ...declSection, nodes: nodeSpecs }
 }
 
 /** JSON-encoded pipeline for service calls (JSON is valid YAML for the service). */
-function buildPipelineJson(nodes: Node<BuilderNodeData>[], edges: Edge[]): string {
-  const obj = buildPipelineObject(nodes, edges)
+function buildPipelineJson(nodes: Node<BuilderNodeData>[], edges: Edge[], variableDeclarations?: import('./types').VariableDeclaration[]): string {
+  const obj = buildPipelineObject(nodes, edges, undefined, variableDeclarations)
   return JSON.stringify({ ...obj, duckdb: { path: ':memory:' } })
 }
 

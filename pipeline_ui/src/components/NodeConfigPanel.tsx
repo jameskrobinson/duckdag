@@ -960,7 +960,10 @@ function VarAutocompleteInput({
     const before = v.slice(0, cursor)
     const triggerMatch = before.match(/\$\{([^}]*)$/)
     if (triggerMatch) {
-      setDropdownFilter(triggerMatch[1].toLowerCase())
+      // Strip "variables." prefix if user has already typed it, so dropdown
+      // filters against bare variable names regardless of what's been typed.
+      const typed = triggerMatch[1].replace(/^variables\./, '').toLowerCase()
+      setDropdownFilter(typed)
       setShowDropdown(variableNames.length > 0)
     } else {
       setShowDropdown(false)
@@ -977,8 +980,8 @@ function VarAutocompleteInput({
     const cursor = input.selectionStart ?? value.length
     const before = value.slice(0, cursor)
     const after = value.slice(cursor)
-    // Replace partial "${..." with "${name}"
-    const replaced = before.replace(/\$\{[^}]*$/, `\${${name}}`)
+    // Always insert the fully-qualified ${variables.name} form
+    const replaced = before.replace(/\$\{[^}]*$/, `\${variables.${name}}`)
     onChange(replaced + after)
     setShowDropdown(false)
     // Restore focus
