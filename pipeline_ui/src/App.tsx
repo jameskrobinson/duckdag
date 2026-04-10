@@ -395,6 +395,20 @@ export default function App() {
       fetchVariableDeclarations(fullPath).then(setVariableDeclarations).catch(() => setVariableDeclarations([]))
       fetchGitStatus(fullPath).then((s) => setHasUncommittedChanges(s.has_uncommitted_changes)).catch(() => setHasUncommittedChanges(false))
 
+      // Load variables now (not via the workspace useEffect) so they are available
+      // for fetchDag below — the useEffect may not have completed yet.
+      let loadedVariablesYaml: string | null = null
+      if (workspace) {
+        try {
+          const varData = await fetchWorkspaceVariables(workspace)
+          if (Object.keys(varData.variables).length > 0) {
+            const yamlLib = await import('js-yaml')
+            loadedVariablesYaml = yamlLib.dump(varData.variables)
+            setVariablesYaml(loadedVariablesYaml)
+          }
+        } catch { /* non-fatal */ }
+      }
+
       // Reconnect to any active session for this pipeline
       fetchActiveSession(fullPath).then((session) => {
         if (session) {
@@ -448,8 +462,8 @@ export default function App() {
         }
       }
 
-      // Get DAG layout from service
-      const dag = await fetchDag(yamlText)
+      // Get DAG layout from service — pass variables so ${variables.*} refs resolve cleanly
+      const dag = await fetchDag(yamlText, undefined, loadedVariablesYaml ?? variablesYaml ?? undefined)
 
       // Clear canvas and rebuild from DAG
       setSelectedNodeId(null)
