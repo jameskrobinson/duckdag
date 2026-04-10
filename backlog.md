@@ -196,7 +196,15 @@ Users can edit Python transform files (`.py`) from within the builder at design 
 - [x] **Planner: session-aware minimal subgraph** — see *Session model* section above for full spec *(done — Phase 4)*
 
 ### Execution
-- [ ] **Parallel execution** — where the DAG allows, run independent nodes concurrently; evaluate Dask vs Hamilton vs asyncio-based approaches
+- [ ] **Parallel execution** — run independent nodes concurrently using a `ThreadPoolExecutor`; the approach is settled (no external orchestrator needed). Development steps:
+  1. **Planner: `depends_on` + `next_ready()`** — add `depends_on: set[str]` to `ExecutionStep`; add `next_ready(plan, completed_ids) → set[ExecutionStep]` utility returning all pending steps whose dependencies are fully satisfied
+  2. **Thread-safe store** — wrap `DuckDBStore.put` and `.get` with a `threading.Lock`; workers copy their inputs to a local `InMemoryStore` before executing to minimise lock hold time
+  3. **Thread-safe status writes** — a single `threading.Lock` guards all `upsert_node` calls in the parallel loop
+  4. **Parallel loop in `run_session`** — replace the sequential `for step in plan.pending` with a `ThreadPoolExecutor` scheduler: submit all `next_ready` steps, wait for `FIRST_COMPLETED`, update `completed_ids`, repeat until no steps remain or cancel requested
+  5. **Fail-fast policy** — when any step raises, cancel remaining in-flight futures and mark them back to `pending`; mirrors current sequential behaviour
+  6. **`max_parallel_nodes` on `PipelineSpec`** — optional field (default `1` = sequential, backward-compatible); set to `0` to mean `os.cpu_count()`
+  7. **`execute_plan` CLI path** — optionally parallelise the `execute_plan` function used by `pipeline run` CLI; can defer to a follow-up
+  8. **Tests** — diamond-shaped DAG fixture confirming parallel execution order and thread safety; cancel-during-parallel test
 - [ ] **Executor uses read-only session connection** — currently the executor opens its own connection; in multi-process scenarios the API/CLI should hold a read-only view while the executor owns the write connection
 
 ### Exporters
@@ -615,7 +623,7 @@ A read-only, workspace-spanning canvas that shows all pipelines as summarised no
 |---|---|
 | 1 | Secrets management backend — Vault, AWS Secrets Manager, or other? |
 | 2 | FastAPI auth mechanism — API key, OAuth2/JWT, or session token? |
-| 3 | Parallel execution backend — Dask, Hamilton, or asyncio? |
+| 3 | Parallel execution backend — **resolved: `ThreadPoolExecutor` in `run_session`**; no external orchestrator needed |
 | 4 | Master registry location convention — `~/.pipeline/registry.duckdb` or configurable? |
 | 5 | DuckDBIOManager in Dagster export — always, optional, or never? |
 | 6 | FMR integration — scope and approach |
