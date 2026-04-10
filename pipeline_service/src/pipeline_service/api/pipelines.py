@@ -20,7 +20,7 @@ from pipeline_core.resolver.models import ColumnSchema, NodeOutputSchema, NodeSp
 from pipeline_core.resolver.validator import _build_output_map, _topological_sort, find_unresolved_jinja_tokens
 from pipeline_core.session import Session
 
-from pipeline_service.utils import resolve_templates_dir, resolve_transforms_root
+from pipeline_service.utils import coerce_row, resolve_templates_dir, resolve_transforms_root
 
 from pipeline_service.models import (
     DagRequest,
@@ -575,7 +575,7 @@ def preview_node(body: PreviewNodeRequest) -> PreviewNodeResponse:
 
     total = len(result_df)
     rows: list[list[Any]] = [
-        [None if (isinstance(v, float) and v != v) else v for v in row]
+        coerce_row(row)
         for row in preview_df.itertuples(index=False, name=None)
     ]
     return PreviewNodeResponse(

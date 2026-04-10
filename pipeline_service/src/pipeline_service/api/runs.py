@@ -15,6 +15,7 @@ from pipeline_core.resolver import resolve_pipeline_from_str
 from pipeline_service.db import Database
 from pipeline_service.models import NodeRunResponse, RunRequest, RunResponse
 from pipeline_service.tasks import run_pipeline
+from pipeline_service.utils import coerce_row
 
 router = APIRouter()
 
@@ -173,6 +174,6 @@ def get_node_output(
     return NodePreviewResponse(
         node_id=node_id,
         columns=cols,
-        rows=[list(r) for r in rows],
+        rows=[coerce_row(r) for r in rows],
         total_rows=total,
     )

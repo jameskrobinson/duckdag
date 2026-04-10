@@ -1,8 +1,59 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 from pipeline_core.resolver.models import PipelineSpec
+
+
+def coerce_value(v: Any) -> Any:
+    """Convert numpy/pandas scalar types to JSON-serialisable Python primitives.
+
+    Pandas DataFrames produced by transform nodes often contain numpy dtypes
+    (``numpy.int64``, ``numpy.float64``, ``numpy.bool_``, etc.).  These are not
+    recognised by Pydantic's JSON serialiser, causing ``PydanticSerializationError``.
+    This function normalises every value to a plain Python type so that the row
+    lists passed to Pydantic response models are always serialisable.
+
+    Mapping:
+    * NaN / NaT / pd.NA  → ``None``
+    * numpy integer       → ``int``
+    * numpy floating      → ``float`` (NaN already handled above)
+    * numpy bool\_         → ``bool``
+    * numpy ndarray       → ``list`` (via ``.tolist()``)
+    * any other numpy scalar with ``.item()`` → native Python scalar
+    * everything else     → unchanged
+    """
+    if v is None:
+        return None
+    # Catch pandas NA / NaT which compare equal to nothing
+    try:
+        import pandas as pd
+        if v is pd.NA or v is pd.NaT:
+            return None
+    except Exception:
+        pass
+    if isinstance(v, float) and v != v:  # NaN
+        return None
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.floating):
+        return None if np.isnan(v) else float(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    # Generic fallback for any remaining numpy scalar
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+def coerce_row(row: tuple | list) -> list[Any]:
+    """Apply ``coerce_value`` to every element of a result row."""
+    return [coerce_value(v) for v in row]
 
 
 def resolve_transforms_root(pipeline_dir: str, workspace: str | None = None) -> str | None:

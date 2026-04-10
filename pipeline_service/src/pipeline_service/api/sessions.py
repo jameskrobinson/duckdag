@@ -38,6 +38,7 @@ from pipeline_core.session.store import get_all_node_statuses, init_session_tabl
 
 from pipeline_service.db import Database
 from pipeline_service.tasks import run_session
+from pipeline_service.utils import coerce_row
 
 router = APIRouter()
 
@@ -740,7 +741,7 @@ def get_session_node_output(
     return SessionNodePreviewResponse(
         node_id=node_id,
         columns=cols,
-        rows=[list(r) for r in rows],
+        rows=[coerce_row(r) for r in rows],
         total_rows=total,
     )
 
