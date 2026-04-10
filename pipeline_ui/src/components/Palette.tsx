@@ -192,6 +192,7 @@ function FlatBucket({
   onToggle,
   sectionKey,
   q,
+  hint,
   onEdit,
   onDelete,
 }: {
@@ -202,6 +203,7 @@ function FlatBucket({
   onToggle: (k: string) => void
   sectionKey: string
   q: string
+  hint?: string
   onEdit?: (c: PaletteConfig) => void
   onDelete?: (c: PaletteConfig) => void
 }) {
@@ -214,7 +216,19 @@ function FlatBucket({
         c.label.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || (c.tags ?? []).some((t) => t.toLowerCase().includes(q))
       )
   )
-  if (visible.length === 0 && q) return null
+  if (visible.length === 0 && q) {
+    return (
+      <div style={styles.bucket}>
+        <div style={styles.bucketHeader} onClick={() => onToggle(sectionKey)}>
+          <span style={styles.bucketIcon}>{icon}</span>
+          <span style={styles.bucketLabel}>{title}</span>
+          <span style={styles.scopeCount}>0</span>
+          <span style={styles.chevron}>▸</span>
+        </div>
+        {hint && <div style={styles.paletteHint}>{hint}</div>}
+      </div>
+    )
+  }
   const isOpen = q.length > 0 || expanded.has(sectionKey)
   const count = visible.length
 
@@ -251,6 +265,7 @@ function GroupBucket({
   expanded,
   onToggle,
   q,
+  hint,
   onEdit,
   onDelete,
 }: {
@@ -258,6 +273,7 @@ function GroupBucket({
   expanded: Set<string>
   onToggle: (k: string) => void
   q: string
+  hint?: string
   onEdit?: (c: PaletteConfig) => void
   onDelete?: (c: PaletteConfig) => void
 }) {
@@ -272,7 +288,19 @@ function GroupBucket({
         )
     )
   )
-  if (matchingGroups.length === 0 && q) return null
+  if (matchingGroups.length === 0 && q) {
+    return (
+      <div style={styles.bucket}>
+        <div style={styles.bucketHeader} onClick={() => onToggle(sectionKey)}>
+          <span style={styles.bucketIcon}>⟨⟩</span>
+          <span style={styles.bucketLabel}>Transforms</span>
+          <span style={styles.scopeCount}>0</span>
+          <span style={styles.chevron}>▸</span>
+        </div>
+        {hint && <div style={styles.paletteHint}>{hint}</div>}
+      </div>
+    )
+  }
   const isOpen = q.length > 0 || expanded.has(sectionKey)
   const fnCount = matchingGroups.reduce((s, g) => s + g.functions.length, 0)
 
@@ -484,9 +512,9 @@ export default function Palette({ palette, pipelineTemplates = [], workspace, on
                 {selectedTag && (
                   <>
                     <div style={styles.tagFilterDivider}>Matching: <strong style={{ color: '#cba6f7' }}>{selectedTag}</strong></div>
-                    <FlatBucket title="Sources" icon="↓" functions={palette.sources} expanded={expanded} onToggle={toggle} sectionKey="__sources__" q={q} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
-                    <GroupBucket groups={palette.transforms} expanded={expanded} onToggle={toggle} q={q} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
-                    <FlatBucket title="Sinks" icon="↑" functions={palette.sinks} expanded={expanded} onToggle={toggle} sectionKey="__sinks__" q={q} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
+                    <FlatBucket title="Sources" icon="↓" functions={palette.sources} expanded={expanded} onToggle={toggle} sectionKey="__sources__" q={q} hint={`No sources match. Add SQL templates to ${workspace ? workspace + '/templates/sql/' : 'workspace/templates/sql/'}`} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
+                    <GroupBucket groups={palette.transforms} expanded={expanded} onToggle={toggle} q={q} hint={`No transforms match. Add Python functions to ${workspace ? workspace + '/transforms/' : 'workspace/transforms/'}`} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
+                    <FlatBucket title="Sinks" icon="↑" functions={palette.sinks} expanded={expanded} onToggle={toggle} sectionKey="__sinks__" q={q} hint={`No sinks match. Add SQL templates to ${workspace ? workspace + '/templates/sql/' : 'workspace/templates/sql/'}`} onEdit={onEditTemplate} onDelete={onDeleteTemplate} />
                   </>
                 )}
               </>
@@ -517,6 +545,7 @@ export default function Palette({ palette, pipelineTemplates = [], workspace, on
             onToggle={toggle}
             sectionKey="__sources__"
             q={q}
+            hint={`No sources match. Add SQL templates to ${workspace ? workspace + '/templates/sql/' : 'workspace/templates/sql/'}`}
             onEdit={onEditTemplate}
             onDelete={onDeleteTemplate}
           />
@@ -527,6 +556,7 @@ export default function Palette({ palette, pipelineTemplates = [], workspace, on
             expanded={expanded}
             onToggle={toggle}
             q={q}
+            hint={`No transforms match. Add Python functions to ${workspace ? workspace + '/transforms/' : 'workspace/transforms/'}`}
             onEdit={onEditTemplate}
             onDelete={onDeleteTemplate}
           />
@@ -540,6 +570,7 @@ export default function Palette({ palette, pipelineTemplates = [], workspace, on
             onToggle={toggle}
             sectionKey="__sinks__"
             q={q}
+            hint={`No sinks match. Add SQL templates to ${workspace ? workspace + '/templates/sql/' : 'workspace/templates/sql/'}`}
             onEdit={onEditTemplate}
             onDelete={onDeleteTemplate}
           />
@@ -613,6 +644,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   bucketIcon: {
     fontSize: 11, color: '#6c7086', width: 14, textAlign: 'center', flexShrink: 0,
+  },
+  paletteHint: {
+    padding: '8px 14px 10px',
+    fontSize: 10,
+    color: '#45475a',
+    lineHeight: 1.5,
+    fontStyle: 'italic',
   },
   bucketLabel: {
     fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',

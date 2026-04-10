@@ -14,6 +14,7 @@ import type {
   SSASMetadata,
   SSASMember,
   SuggestConfigResponse,
+  UberPipelineResponse,
   VariableDeclaration,
   WorkspacePipelineFile,
   WorkspaceVariables,
@@ -200,6 +201,19 @@ export function invalidateSessionNode(session_id: string, node_id: string): Prom
   return request<string[]>(`/sessions/${session_id}/nodes/${node_id}/invalidate`, { method: 'POST', body: '{}' })
 }
 
+/** Invalidate a node and all its downstream dependents, then immediately re-execute the session.
+ *  When rerunAncestors=true, upstream nodes are also invalidated so they re-run fresh. */
+export function rerunSessionNode(
+  session_id: string,
+  node_id: string,
+  rerunAncestors = false,
+): Promise<import('../types').SessionResponse> {
+  return request(`/sessions/${session_id}/run/node/${node_id}`, {
+    method: 'POST',
+    body: JSON.stringify({ rerun_ancestors: rerunAncestors }),
+  })
+}
+
 export function executeSession(
   session_id: string,
   pipeline_yaml?: string,
@@ -240,6 +254,10 @@ export function fetchNodeLineage(session_id: string, node_id: string): Promise<i
   return request(`/sessions/${session_id}/nodes/${node_id}/lineage`)
 }
 
+export function fetchPipelineLineage(session_id: string): Promise<import('../types').LineageRow[]> {
+  return request(`/sessions/${session_id}/lineage`)
+}
+
 // ---------------------------------------------------------------------------
 // Workspace
 // ---------------------------------------------------------------------------
@@ -258,6 +276,11 @@ export function readWorkspacePipeline(path: string): Promise<{ yaml: string; nam
 
 export function fetchWorkspaceVariables(workspace: string): Promise<WorkspaceVariables> {
   return request<WorkspaceVariables>(`/workspace/variables?workspace=${encodeURIComponent(workspace)}`)
+}
+
+export function fetchUberPipeline(workspaces: string[]): Promise<UberPipelineResponse> {
+  const qs = workspaces.map(w => `workspace=${encodeURIComponent(w)}`).join('&')
+  return request<UberPipelineResponse>(`/workspace/uber-pipeline?${qs}`)
 }
 
 export function writeWorkspaceVariables(
@@ -403,6 +426,21 @@ export function writeShadowYaml(
   })
 }
 
+export function fetchProvenance(
+  session_id: string,
+  node_id: string,
+  output_row_id: number,
+): Promise<import('../types').ProvenanceRowResponse[]> {
+  return request(`/sessions/${session_id}/nodes/${node_id}/provenance?output_row_id=${output_row_id}`)
+}
+
+export function startProbe(session_id: string, probe_rows = 50): Promise<{ session_id: string; probe_status: string }> {
+  return request(`/sessions/${session_id}/probe`, {
+    method: 'POST',
+    body: JSON.stringify({ probe_rows }),
+  })
+}
+
 export function fetchShadowResult(
   session_id: string,
   node_id: string,
@@ -420,5 +458,17 @@ export function suggestConfig(
   return request<SuggestConfigResponse>('/pipelines/suggest-config', {
     method: 'POST',
     body: JSON.stringify({ node_type, node_id, input_schemas, current_params }),
+  })
+}
+
+export function patchNodeConfig(
+  nodeId: string,
+  pipelinePath: string,
+  params: Record<string, unknown>,
+  description?: string,
+): Promise<void> {
+  return request<void>(`/pipelines/node/${encodeURIComponent(nodeId)}/config`, {
+    method: 'PATCH',
+    body: JSON.stringify({ pipeline_path: pipelinePath, params, description }),
   })
 }

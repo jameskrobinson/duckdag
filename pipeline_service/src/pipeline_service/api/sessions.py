@@ -76,6 +76,7 @@ class SessionResponse(BaseModel):
     pipeline_path: str | None = None
     workspace: str | None = None
     branched_from: str | None = None
+    probe_status: str | None = None
 
 
 class SessionNodeResponse(BaseModel):
@@ -563,6 +564,132 @@ def invalidate_session_node(
     return reset_ids
 
 
+# ---------------------------------------------------------------------------
+# POST /sessions/{id}/run/node/{node_id} — invalidate + re-execute from a node
+# ---------------------------------------------------------------------------
+
+class RunNodeRequest(BaseModel):
+    rerun_ancestors: bool = False
+    """When True, also invalidate all upstream ancestors so the node reruns
+    with freshly re-executed inputs rather than cached results."""
+
+
+@router.post("/{session_id}/run/node/{node_id}", response_model=SessionResponse)
+def run_session_from_node(
+    session_id: str,
+    node_id: str,
+    background_tasks: BackgroundTasks,
+    body: RunNodeRequest = RunNodeRequest(),
+    db: Database = Depends(get_db),
+) -> SessionResponse:
+    """Invalidate a node and all its downstream dependents, then immediately re-execute.
+
+    Combines ``POST /sessions/{id}/nodes/{node_id}/invalidate`` and
+    ``POST /sessions/{id}/execute`` into a single call.  The target node and
+    everything downstream are reset to ``pending``; upstream (completed) nodes
+    are left untouched so they are skipped in the new execution wave.
+
+    Only valid for sessions in the ``active`` state (not currently running).
+    """
+    row = db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    if row["status"] == "running":
+        raise HTTPException(status_code=409, detail="Session is already running — cancel it first")
+    if row["status"] not in ("active",):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot re-run nodes in a {row['status']} session",
+        )
+
+    bundle_path = row.get("bundle_path")
+    if not bundle_path:
+        raise HTTPException(status_code=400, detail="Session has no bundle path")
+
+    session_db_path = str(Path(bundle_path) / "session.duckdb")
+    if not Path(session_db_path).exists():
+        raise HTTPException(status_code=409, detail="Session database not found")
+
+    # --- Compute downstream closure (same BFS as invalidate) ---
+    pipeline_yaml = row.get("pipeline_yaml") or ""
+    downstream_ids: set[str] = set()
+
+    if pipeline_yaml:
+        try:
+            import yaml as _yaml
+            _variables = _yaml.safe_load(row.get("variables_yaml") or "") or None
+            spec = resolve_pipeline_from_str(pipeline_yaml, variables=_variables)
+            # Build adjacency maps for both directions
+            node_to_output: dict[str, str] = {}
+            output_to_node: dict[str, str] = {}   # output_name → producing node_id
+            downstream_adj: dict[str, list[str]] = {}  # output_name → consuming node_ids
+            for n in spec.nodes:
+                if n.output:
+                    node_to_output[n.id] = n.output
+                    output_to_node[n.output] = n.id
+                for inp in n.inputs:
+                    downstream_adj.setdefault(inp, []).append(n.id)
+
+            # Downstream BFS (node_id + all descendants)
+            queue = [node_id]
+            seen: set[str] = set()
+            while queue:
+                current = queue.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                out = node_to_output.get(current, current)
+                for dn in downstream_adj.get(out, []):
+                    queue.append(dn)
+            downstream_ids = seen
+
+            # If rerun_ancestors requested, also walk upstream
+            if body.rerun_ancestors:
+                node_map = {n.id: n for n in spec.nodes}
+                anc_queue = [node_id]
+                while anc_queue:
+                    current = anc_queue.pop()
+                    for inp_name in node_map.get(current, spec.nodes[0]).inputs:
+                        producer = output_to_node.get(inp_name)
+                        if producer and producer not in downstream_ids:
+                            downstream_ids.add(producer)
+                            anc_queue.append(producer)
+        except Exception:
+            downstream_ids = {node_id}
+    else:
+        downstream_ids = {node_id}
+
+    # --- Reset to pending ---
+    import duckdb as _duckdb
+    conn = _duckdb.connect(session_db_path)
+    try:
+        tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
+        if "_session_nodes" not in tables:
+            init_session_tables(conn)
+        for nid in sorted(downstream_ids):
+            upsert_node(conn, nid, "pending")
+    finally:
+        conn.close()
+
+    # --- Trigger background execution ---
+    variables_yaml = row.get("variables_yaml")
+    background_tasks.add_task(
+        run_session,
+        session_id,
+        pipeline_yaml,
+        row.get("env_yaml"),
+        db,
+        bundle_path=bundle_path,
+        workspace=row.get("workspace"),
+        pipeline_path=row.get("pipeline_path"),
+        variables_yaml=variables_yaml,
+        shadow_mode=False,
+    )
+
+    row = db.get_session(session_id)
+    return _row_to_response(row)
+
+
 @router.get("/{session_id}/nodes/{node_id}/output", response_model=SessionNodePreviewResponse)
 def get_session_node_output(
     session_id: str,
@@ -821,3 +948,132 @@ def abandon_session(
     db.update_session(session_id, "abandoned")
     row = db.get_session(session_id)
     return _row_to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# POST /sessions/{id}/probe — trigger probe-mode re-execution
+# ---------------------------------------------------------------------------
+
+class ProbeRequest(BaseModel):
+    probe_rows: int = 50
+
+
+class ProbeResponse(BaseModel):
+    session_id: str
+    probe_status: str
+
+
+@router.post("/{session_id}/probe", response_model=ProbeResponse)
+def start_probe(
+    session_id: str,
+    body: ProbeRequest,
+    background_tasks: BackgroundTasks,
+    db: Database = Depends(get_db),
+) -> ProbeResponse:
+    """Trigger a probe-mode re-execution for the session.
+
+    Reads sampled outputs from the completed ``session.duckdb`` and re-runs
+    transform nodes with ``_row_id`` tracking, writing results to
+    ``session_probe.duckdb`` in the bundle directory.
+
+    ``probe_status`` transitions: ``null`` / ``failed`` → ``running`` → ``ready`` | ``failed``
+
+    The session must be ``active`` or ``finalized`` and must have a ``bundle_path``.
+    """
+    from pipeline_service.tasks import run_probe
+
+    row = db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    if row["status"] == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot probe a running session — wait for execution to complete first",
+        )
+    if row["status"] == "abandoned":
+        raise HTTPException(status_code=409, detail="Session has been abandoned")
+
+    bundle_path = row.get("bundle_path")
+    if not bundle_path or not Path(bundle_path).exists():
+        raise HTTPException(status_code=409, detail="Session has no bundle — run the session first")
+
+    db.update_probe_status(session_id, "running")
+
+    background_tasks.add_task(
+        run_probe,
+        session_id=session_id,
+        pipeline_yaml=row["pipeline_yaml"],
+        env_yaml=row.get("env_yaml"),
+        variables_yaml=row.get("variables_yaml"),
+        bundle_path=bundle_path,
+        db=db,
+        pipeline_path=row.get("pipeline_path"),
+        workspace=row.get("workspace"),
+        probe_rows=body.probe_rows,
+    )
+
+    return ProbeResponse(session_id=session_id, probe_status="running")
+
+
+# ---------------------------------------------------------------------------
+# GET /sessions/{id}/nodes/{node_id}/provenance — row-level lineage query
+# ---------------------------------------------------------------------------
+
+class ProvenanceRowResponse(BaseModel):
+    node_id: str
+    row_index: int
+    row_values: dict
+    opaque: bool
+
+
+@router.get(
+    "/{session_id}/nodes/{node_id}/provenance",
+    response_model=list[ProvenanceRowResponse],
+)
+def get_provenance(
+    session_id: str,
+    node_id: str,
+    output_row_id: int,
+    db: Database = Depends(get_db),
+) -> list[ProvenanceRowResponse]:
+    """Trace an output row back to its contributing source rows.
+
+    Requires a completed probe run (``probe_status == 'ready'``).
+    Returns a list of source rows; ``opaque=true`` entries indicate nodes
+    where row-level lineage could not be traced (e.g. GROUP BY).
+    """
+    from pipeline_core.lineage.provenance import get_probe_lineage, open_probe_db
+
+    row = db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    probe_status = row.get("probe_status")
+    if probe_status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Probe run not ready (status: {probe_status or 'not started'}). "
+                   "Call POST /sessions/{id}/probe first.",
+        )
+
+    bundle_path = row.get("bundle_path")
+    probe_db_path = str(Path(bundle_path) / "session_probe.duckdb")
+    if not Path(probe_db_path).exists():
+        raise HTTPException(status_code=404, detail="session_probe.duckdb not found")
+
+    try:
+        conn = open_probe_db(probe_db_path)
+        results = get_probe_lineage(conn, node_id, output_row_id)
+        conn.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Provenance query failed: {exc}")
+
+    return [
+        ProvenanceRowResponse(
+            node_id=r.node_id,
+            row_index=r.row_index,
+            row_values=r.row_values,
+            opaque=r.opaque,
+        )
+        for r in results
+    ]

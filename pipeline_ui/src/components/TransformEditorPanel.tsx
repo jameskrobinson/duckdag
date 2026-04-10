@@ -12,6 +12,9 @@ interface TransformEditorPanelProps {
   onClose: () => void
   /** Called after a save or promote so the palette can refresh its transform list */
   onTransformsSaved?: () => void
+  /** Called after a transform file is saved with the file stem (e.g. "my_transforms").
+   *  Used by the parent to mark canvas nodes that reference this module as stale. */
+  onTransformFileSaved?: (moduleStem: string) => void
 }
 
 type FileWithScope = WorkspaceTransformFile & { scope: 'workspace' | 'pipeline' }
@@ -53,7 +56,7 @@ REGISTRY = {
 }
 `
 
-export default function TransformEditorPanel({ workspace, pipelineDir, onClose, onTransformsSaved }: TransformEditorPanelProps) {
+export default function TransformEditorPanel({ workspace, pipelineDir, onClose, onTransformsSaved, onTransformFileSaved }: TransformEditorPanelProps) {
   const [files, setFiles] = useState<FileWithScope[]>([])
   const [selected, setSelected] = useState<FileWithScope | null>(null)
   const [code, setCode] = useState('')
@@ -149,6 +152,8 @@ export default function TransformEditorPanel({ workspace, pipelineDir, onClose, 
       setFiles(list)
       // Notify parent to refresh palette
       onTransformsSaved?.()
+      // Notify parent to mark nodes that reference this module as stale
+      onTransformFileSaved?.(selected.name)
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Save failed')
     } finally {

@@ -14,6 +14,7 @@
 import { useRef, useState } from 'react'
 import type { NodePreviewResponse, SSASDimension, SSASHierarchy, SSASMeasure, SSASMember, SSASMetadata } from '../types'
 import { fetchSSASMembers, fetchSSASMetadata, writeWorkspaceFile, type SSASConnectionParams } from '../api/client'
+import { downloadCsv } from '../utils/csv'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -557,7 +558,14 @@ export default function SSASCubeBrowser({
           {previewData && !previewError && (
             <div style={s.previewTableWrap}>
               <div style={s.previewMeta}>
-                {previewData.total_rows} rows · {previewData.columns.length} columns
+                <span>{previewData.total_rows} rows · {previewData.columns.length} columns</span>
+                <button
+                  style={s.csvBtn}
+                  onClick={() => downloadCsv(previewData.columns, previewData.rows, `${selectedCube || 'cube'}_result.csv`)}
+                  title="Download as CSV"
+                >
+                  ⬇ CSV
+                </button>
               </div>
               <div style={s.previewScroll}>
                 <table style={s.previewTable}>
@@ -955,7 +963,14 @@ const s: Record<string, React.CSSProperties> = {
     padding: '6px 10px', fontSize: 12, borderRadius: 4,
   },
   previewTableWrap: { border: '1px solid #313244', borderRadius: 4, overflow: 'hidden' },
-  previewMeta: { fontSize: 11, color: '#6c7086', padding: '3px 8px', background: '#181825' },
+  previewMeta: {
+    fontSize: 11, color: '#6c7086', padding: '3px 8px', background: '#181825',
+    display: 'flex', alignItems: 'center', gap: 10,
+  },
+  csvBtn: {
+    background: '#313244', border: '1px solid #45475a', color: '#a6adc8',
+    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 10, fontWeight: 600,
+  },
   previewScroll: { overflowX: 'auto', maxHeight: 120 },
   previewTable: { borderCollapse: 'collapse', width: '100%', fontSize: 11 },
   previewTh: {

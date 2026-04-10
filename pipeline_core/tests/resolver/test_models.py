@@ -53,9 +53,12 @@ class TestNodeSpec:
             "sql_transform",
             "pandas_transform",
             "load_odbc",
+            "load_ssas",
             "load_file",
             "load_duckdb",
+            "load_rest_api",
             "push_odbc",
+            "push_duckdb",
             "export_dta",
             "load_internal_api",
         ],
@@ -63,6 +66,27 @@ class TestNodeSpec:
     def test_all_node_types_accepted(self, node_type: str):
         node = NodeSpec(id="n", type=node_type)
         assert node.type == node_type
+
+    def test_dq_checks_parsed(self):
+        node = NodeSpec(
+            id="n",
+            type="load_duckdb",
+            output="t.out",
+            dq_checks=[
+                {"type": "row_count", "min_rows": 1},
+                {"type": "null_rate", "column": "val", "max_null_rate": 0.05},
+                {"type": "value_range", "column": "val", "min_value": 0.0, "max_value": 100.0},
+                {"type": "unique", "column": "id"},
+            ],
+        )
+        assert len(node.dq_checks) == 4
+        assert node.dq_checks[0].type == "row_count"
+        assert node.dq_checks[0].min_rows == 1
+        assert node.dq_checks[1].column == "val"
+
+    def test_dq_check_invalid_type_raises(self):
+        with pytest.raises(Exception):
+            NodeSpec(id="n", type="load_duckdb", dq_checks=[{"type": "nonexistent"}])
 
     def test_params_accepts_nested_structures(self):
         node = NodeSpec(
@@ -125,3 +149,69 @@ class TestPipelineSpec:
         minimal_pipeline["parameters"] = {"period_min": 20120630, "rc_list": ["AT", "AU"]}
         spec = PipelineSpec.model_validate(minimal_pipeline)
         assert spec.parameters["rc_list"] == ["AT", "AU"]
+
+    def test_variable_declarations_parsed(self, minimal_pipeline):
+        minimal_pipeline["variable_declarations"] = [
+            {"name": "start_date", "type": "string", "default": "2024-01-01",
+             "description": "Run start date", "required": False},
+            {"name": "country", "type": "string", "default": None,
+             "description": "Country filter", "required": True},
+        ]
+        spec = PipelineSpec.model_validate(minimal_pipeline)
+        assert len(spec.variable_declarations) == 2
+        assert spec.variable_declarations[0].name == "start_date"
+        assert spec.variable_declarations[1].required is True
+
+    def test_variable_declarations_default_empty(self, minimal_pipeline):
+        spec = PipelineSpec.model_validate(minimal_pipeline)
+        assert spec.variable_declarations == []
+
+    def test_shadow_mode_defaults_false(self, minimal_pipeline):
+        spec = PipelineSpec.model_validate(minimal_pipeline)
+        assert spec.shadow_mode is False
+
+    def test_shadow_mode_true(self, minimal_pipeline):
+        minimal_pipeline["shadow_mode"] = True
+        spec = PipelineSpec.model_validate(minimal_pipeline)
+        assert spec.shadow_mode is True
+
+
+class TestODBCConnectionConfig:
+    def test_inline_params_accepted(self):
+        cfg = ODBCConnectionConfig(
+            driver="ODBC Driver 17 for SQL Server",
+            server="myserver",
+            database="mydb",
+            uid="user",
+            pwd="secret",
+            trusted=False,
+        )
+        assert cfg.server == "myserver"
+        assert cfg.pwd == "secret"
+        assert cfg.trusted is False
+
+    def test_dsn_only(self):
+        cfg = ODBCConnectionConfig(dsn="MY_DSN")
+        assert cfg.dsn == "MY_DSN"
+        assert cfg.server is None
+
+    def test_connection_string_only(self):
+        cfg = ODBCConnectionConfig(connection_string="DSN=MY_DSN;UID=u;PWD=p")
+        assert cfg.connection_string == "DSN=MY_DSN;UID=u;PWD=p"
+
+    def test_odbc_in_pipeline_spec(self):
+        data = {
+            "duckdb": {"path": ":memory:"},
+            "odbc": {
+                "prod": {
+                    "driver": "ODBC Driver 18 for SQL Server",
+                    "server": "prod-server",
+                    "database": "prod_db",
+                    "trusted": True,
+                }
+            },
+            "nodes": [],
+        }
+        spec = PipelineSpec.model_validate(data)
+        assert spec.odbc["prod"].driver == "ODBC Driver 18 for SQL Server"
+        assert spec.odbc["prod"].trusted is True

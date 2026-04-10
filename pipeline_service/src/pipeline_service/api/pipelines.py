@@ -548,6 +548,58 @@ class SuggestConfigResponse(BaseModel):
     explanation: str
 
 
+class NodeConfigUpdateRequest(BaseModel):
+    pipeline_path: str
+    """Absolute path to the pipeline.yaml file to update."""
+    params: dict[str, Any]
+    """Full replacement params dict for the node."""
+    description: str | None = None
+    """If provided, also updates the node's description field."""
+
+
+@router.patch("/node/{node_id}/config")
+def update_node_config(node_id: str, body: NodeConfigUpdateRequest) -> dict[str, Any]:
+    """Write a node's params back to the pipeline YAML file on disk.
+
+    Reads the pipeline YAML at ``pipeline_path``, finds the node by ID,
+    replaces its ``params`` (and optionally ``description``), then writes the
+    file back.  The rest of the YAML structure is preserved as-is.
+
+    Returns the updated params dict on success.
+    """
+    path = _Path(body.pipeline_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Pipeline file not found: {path}")
+
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to parse pipeline YAML: {exc}")
+
+    nodes = raw.get("nodes", [])
+    updated = False
+    for node in nodes:
+        if isinstance(node, dict) and node.get("id") == node_id:
+            node["params"] = body.params
+            if body.description is not None:
+                node["description"] = body.description
+            updated = True
+            break
+
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found in pipeline")
+
+    try:
+        path.write_text(
+            yaml.dump(raw, allow_unicode=True, default_flow_style=False, sort_keys=False, width=120),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write pipeline YAML: {exc}")
+
+    return {"node_id": node_id, "params": body.params}
+
+
 @router.post("/suggest-config", response_model=SuggestConfigResponse)
 def suggest_config(body: SuggestConfigRequest) -> SuggestConfigResponse:
     """Call Claude to suggest node params given the node type and input schemas.

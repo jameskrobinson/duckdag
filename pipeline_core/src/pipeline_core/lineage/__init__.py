@@ -262,6 +262,70 @@ def schema_diff_lineage(
 
 
 # ---------------------------------------------------------------------------
+# Tracked access lineage (pandas_transform with TrackingProxy)
+# ---------------------------------------------------------------------------
+
+def tracking_lineage(
+    node_id: str,
+    accessed: dict[str, set[str]],
+    output_columns: list[str],
+    input_schemas: dict[str, list[str]],
+) -> list[LineageRow]:
+    """Build lineage from explicitly tracked column access recorded by TrackingProxy.
+
+    ``accessed`` maps source_node_id → set of column names that were actually
+    read during the transform.  Columns not explicitly accessed (e.g. those
+    referenced only via positional indexing or pandas method arguments) are
+    handled via ``schema_diff_lineage`` as a conservative fallback.
+
+    Confidence is ``"tracked"`` — more precise than ``schema_diff`` (we know
+    *which* columns were read) but less precise than ``sql_exact`` (we don't
+    know *which output column* each input column contributed to).
+    """
+    rows: list[LineageRow] = []
+
+    # Flatten accessed columns to a (source_node_id, col) list
+    all_accessed: list[tuple[str, str]] = [
+        (src, col)
+        for src, cols in accessed.items()
+        for col in sorted(cols)
+    ]
+
+    # If nothing tracked (e.g. no __getitem__ was called), fall back entirely
+    if not all_accessed:
+        return schema_diff_lineage(node_id, input_schemas, output_columns)
+
+    # Build lookup: col_name → first source node that was accessed for it
+    col_to_source: dict[str, str] = {}
+    for src, col in all_accessed:
+        if col not in col_to_source:
+            col_to_source[col] = src
+
+    for out_col in output_columns:
+        if out_col in col_to_source:
+            # Pass-through: the same column name was read from an input
+            rows.append(LineageRow(
+                node_id=node_id,
+                output_column=out_col,
+                source_node_id=col_to_source[out_col],
+                source_column=out_col,
+                confidence="tracked",
+            ))
+        else:
+            # Novel output column — attribute to everything that was accessed
+            for src, col in all_accessed:
+                rows.append(LineageRow(
+                    node_id=node_id,
+                    output_column=out_col,
+                    source_node_id=src,
+                    source_column=col,
+                    confidence="tracked",
+                ))
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Session DuckDB helpers
 # ---------------------------------------------------------------------------
 

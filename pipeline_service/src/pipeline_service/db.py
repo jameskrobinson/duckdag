@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at     TIMESTAMP NOT NULL,
     finalized_at   TIMESTAMP,
     error          TEXT,
-    bundle_path    VARCHAR
+    bundle_path    VARCHAR,
+    probe_status   VARCHAR
 );
 """
 
@@ -80,6 +81,9 @@ class Database:
             # sessions table was added in Phase 2; migration for existing DBs.
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS variables_yaml TEXT"
+            )
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS probe_status VARCHAR"
             )
 
     def close(self) -> None:
@@ -268,6 +272,12 @@ class Database:
         self._exec(
             "UPDATE sessions SET pipeline_yaml = ? WHERE session_id = ?",
             [pipeline_yaml, session_id],
+        )
+
+    def update_probe_status(self, session_id: str, probe_status: str) -> None:
+        self._exec(
+            "UPDATE sessions SET probe_status = ? WHERE session_id = ?",
+            [probe_status, session_id],
         )
 
     def get_active_session_for_pipeline(self, pipeline_path: str) -> dict[str, Any] | None:

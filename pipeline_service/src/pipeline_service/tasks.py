@@ -454,3 +454,71 @@ def run_session(
             )
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Probe execution task
+# ---------------------------------------------------------------------------
+
+def run_probe(
+    session_id: str,
+    pipeline_yaml: str,
+    env_yaml: str | None,
+    variables_yaml: str | None,
+    bundle_path: str,
+    db: Database,
+    pipeline_path: str | None = None,
+    workspace: str | None = None,
+    probe_rows: int = 50,
+) -> None:
+    """Background task: run the pipeline in probe mode on a sample of rows.
+
+    Reads load-node outputs from the already-executed ``session.duckdb`` and
+    re-executes transform nodes on the sampled data, writing results to
+    ``session_probe.duckdb`` in the same bundle directory.
+
+    Updates ``probe_status`` on the session record:
+      running → ready   (success)
+      running → failed  (any unhandled exception)
+    """
+    from pipeline_core.executor.probe_executor import execute_probe
+
+    bundle_dir = Path(bundle_path)
+    session_db_path = str(bundle_dir / "session.duckdb")
+    probe_db_path = str(bundle_dir / "session_probe.duckdb")
+
+    try:
+        env = yaml.safe_load(env_yaml) if env_yaml else None
+        variables = yaml.safe_load(variables_yaml) if variables_yaml else None
+
+        spec = resolve_pipeline_from_str(pipeline_yaml, env=env, variables=variables)
+
+        # Resolve templates / transforms paths — same logic as run_session
+        pipeline_dir: str | None = None
+        if pipeline_path:
+            p = Path(pipeline_path)
+            pipeline_dir = str(p if p.is_dir() else p.parent)
+        elif workspace:
+            pipeline_dir = workspace
+        if pipeline_dir:
+            spec = spec.model_copy(update={
+                "templates": TemplatesConfig(dir=resolve_templates_dir(pipeline_dir, spec, workspace)),
+                "transforms_root": resolve_transforms_root(pipeline_dir, workspace),
+                "pipeline_dir": pipeline_dir,
+            })
+
+        plan = build_plan(spec)
+
+        execute_probe(
+            spec=spec,
+            plan=plan,
+            session_db_path=session_db_path,
+            probe_db_path=probe_db_path,
+            probe_rows=probe_rows,
+        )
+        db.update_probe_status(session_id, "ready")
+
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("Probe execution failed for session %s", session_id)
+        db.update_probe_status(session_id, "failed")
