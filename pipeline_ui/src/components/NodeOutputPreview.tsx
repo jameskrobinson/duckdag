@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NodePreviewResponse } from '../types'
 import type { ChartConfig } from './ChartView'
 import ChartView from './ChartView'
+import ProvenanceSidePanel from './ProvenanceSidePanel'
 import { downloadCsv } from '../utils/csv'
 
 type Tab = 'table' | 'chart'
@@ -18,6 +19,10 @@ interface NodeOutputPreviewProps {
   canSave?: boolean
   onSaveChartForNode?: (config: ChartConfig) => void
   onSaveChartAsDefault?: (config: ChartConfig) => void
+  /** Session ID — enables "Explain this row" right-click when probeStatus is 'ready' */
+  sessionId?: string
+  /** Probe status — must be 'ready' for row lineage to be available */
+  probeStatus?: 'running' | 'ready' | 'failed' | null
 }
 
 const DEFAULT_LIMIT = 1000
@@ -30,11 +35,18 @@ const DEFAULT_LIMIT = 1000
 export default function NodeOutputPreview({
   runId, nodeId, onClose, fetchFn,
   chartConfig, canSave, onSaveChartForNode, onSaveChartAsDefault,
+  sessionId, probeStatus,
 }: NodeOutputPreviewProps) {
   const [tab, setTab] = useState<Tab>('table')
   const [preview, setPreview] = useState<NodePreviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowIndex: number } | null>(null)
+  // Row index currently shown in the provenance panel
+  const [provenanceRowIndex, setProvenanceRowIndex] = useState<number | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
 
   // Limit controls
   const [limitEnabled, setLimitEnabled] = useState(true)
@@ -46,6 +58,18 @@ export default function NodeOutputPreview({
   const [whereActive, setWhereActive] = useState('')
 
   const fetchingRef = useRef(0)
+
+  // Dismiss context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return
+    function handle(e: MouseEvent) {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [contextMenu])
 
   const doFetch = useCallback(async (limit: number, limitOn: boolean, where: string) => {
     const token = ++fetchingRef.current
@@ -111,6 +135,11 @@ export default function NodeOutputPreview({
               {isFiltered
                 ? <><span style={styles.filteredBadge}>filtered</span> {rowsShown.toLocaleString()} rows</>
                 : <>showing {rowsShown.toLocaleString()} of {totalRows.toLocaleString()} rows</>}
+            </span>
+          )}
+          {probeStatus === 'ready' && (
+            <span style={styles.probeBadge} title="Row lineage is available — right-click any row to explain it">
+              ⬡ lineage ready
             </span>
           )}
           {preview && preview.rows.length > 0 && (
@@ -185,47 +214,87 @@ export default function NodeOutputPreview({
           )}
         </div>
 
-        {/* ── Body ── */}
-        <div style={styles.body}>
-          {loading && <div style={styles.hint}>Loading…</div>}
-          {error && <div style={styles.errorNote}>{error}</div>}
+        {/* ── Body (table + optional provenance side panel) ── */}
+        <div style={{ ...styles.body, flexDirection: 'row' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            {loading && <div style={styles.hint}>Loading…</div>}
+            {error && <div style={styles.errorNote}>{error}</div>}
 
-          {preview && tab === 'table' && (
-            <div style={styles.tableWrap}>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    {preview.columns.map((col) => (
-                      <th key={col} style={styles.th}>{col}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.rows.map((row, i) => (
-                    <tr key={i} style={i % 2 === 0 ? styles.trEven : styles.trOdd}>
-                      {row.map((cell, j) => (
-                        <td key={j} style={styles.td}>
-                          {cell == null ? <span style={styles.null}>null</span> : String(cell)}
-                        </td>
+            {preview && tab === 'table' && (
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      {preview.columns.map((col) => (
+                        <th key={col} style={styles.th}>{col}</th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((row, i) => (
+                      <tr
+                        key={i}
+                        style={{
+                          ...(i % 2 === 0 ? styles.trEven : styles.trOdd),
+                          ...(provenanceRowIndex === i ? styles.trHighlight : {}),
+                        }}
+                        onContextMenu={probeStatus === 'ready' ? (e) => {
+                          e.preventDefault()
+                          setContextMenu({ x: e.clientX, y: e.clientY, rowIndex: i })
+                        } : undefined}
+                      >
+                        {row.map((cell, j) => (
+                          <td key={j} style={styles.td}>
+                            {cell == null ? <span style={styles.null}>null</span> : String(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-          {preview && tab === 'chart' && (
-            <ChartView
-              columns={preview.columns}
-              rows={preview.rows}
-              config={chartConfig ?? {}}
-              canSave={canSave}
-              onSaveForNode={onSaveChartForNode}
-              onSaveAsDefault={onSaveChartAsDefault}
+            {preview && tab === 'chart' && (
+              <ChartView
+                columns={preview.columns}
+                rows={preview.rows}
+                config={chartConfig ?? {}}
+                canSave={canSave}
+                onSaveForNode={onSaveChartForNode}
+                onSaveAsDefault={onSaveChartAsDefault}
+              />
+            )}
+          </div>
+
+          {/* Provenance side panel */}
+          {provenanceRowIndex !== null && sessionId && (
+            <ProvenanceSidePanel
+              sessionId={sessionId}
+              nodeId={nodeId}
+              rowIndex={provenanceRowIndex}
+              onClose={() => setProvenanceRowIndex(null)}
             />
           )}
         </div>
+
+        {/* Context menu */}
+        {contextMenu && (
+          <div
+            ref={contextMenuRef}
+            style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              style={styles.contextMenuItem}
+              onClick={() => {
+                setProvenanceRowIndex(contextMenu.rowIndex)
+                setContextMenu(null)
+              }}
+            >
+              ⬡ Explain this row
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -301,6 +370,22 @@ const styles: Record<string, React.CSSProperties> = {
   errorNote: {
     margin: '12px 16px', padding: '8px 10px', background: '#f38ba822',
     border: '1px solid #f38ba844', borderRadius: 6, fontSize: 11, color: '#f38ba8',
+  },
+  probeBadge: {
+    fontSize: 9, fontWeight: 700, color: '#b4befe', background: '#b4befe18',
+    border: '1px solid #b4befe44', borderRadius: 3, padding: '2px 7px',
+    textTransform: 'uppercase', flexShrink: 0, cursor: 'default',
+  },
+  trHighlight: { background: '#b4befe18', outline: '1px solid #b4befe44' },
+  contextMenu: {
+    position: 'fixed', zIndex: 2000, background: '#313244',
+    border: '1px solid #45475a', borderRadius: 6, padding: 4,
+    boxShadow: '0 4px 16px #00000055', minWidth: 160,
+  },
+  contextMenuItem: {
+    display: 'block', width: '100%', background: 'none', border: 'none',
+    color: '#cdd6f4', fontSize: 12, padding: '6px 12px', cursor: 'pointer',
+    textAlign: 'left', borderRadius: 4,
   },
   tableWrap: { overflow: 'auto', flex: 1 },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 11 },

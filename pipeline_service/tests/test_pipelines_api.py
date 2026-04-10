@@ -125,3 +125,36 @@ def test_dag_linear_layout_increases_x_with_depth(client):
 def test_dag_invalid_yaml_returns_422(client):
     resp = client.post("/pipelines/dag", json={"pipeline_yaml": INVALID_YAML})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Validate — warnings field
+# ---------------------------------------------------------------------------
+
+def test_validate_response_has_warnings_field(client):
+    """ValidationResponse always includes a 'warnings' key, even when empty."""
+    resp = client.post("/pipelines/validate", json={"pipeline_yaml": SIMPLE_PIPELINE_YAML})
+    body = resp.json()
+    assert "warnings" in body
+    assert isinstance(body["warnings"], list)
+
+
+def test_validate_with_variables_yaml(client):
+    """variables_yaml parameter is accepted and pipeline validates correctly."""
+    pipeline_with_var = """
+duckdb:
+  path: ":memory:"
+nodes:
+  - id: load
+    type: load_duckdb
+    output: t.raw
+    params:
+      query: "SELECT {{ limit }} AS x"
+"""
+    variables = "limit: 42\n"
+    resp = client.post(
+        "/pipelines/validate",
+        json={"pipeline_yaml": pipeline_with_var, "variables_yaml": variables},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is True

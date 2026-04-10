@@ -76,6 +76,7 @@ class SessionResponse(BaseModel):
     pipeline_path: str | None = None
     workspace: str | None = None
     branched_from: str | None = None
+    probe_status: str | None = None
 
 
 class SessionNodeResponse(BaseModel):
@@ -947,3 +948,132 @@ def abandon_session(
     db.update_session(session_id, "abandoned")
     row = db.get_session(session_id)
     return _row_to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# POST /sessions/{id}/probe — trigger probe-mode re-execution
+# ---------------------------------------------------------------------------
+
+class ProbeRequest(BaseModel):
+    probe_rows: int = 50
+
+
+class ProbeResponse(BaseModel):
+    session_id: str
+    probe_status: str
+
+
+@router.post("/{session_id}/probe", response_model=ProbeResponse)
+def start_probe(
+    session_id: str,
+    body: ProbeRequest,
+    background_tasks: BackgroundTasks,
+    db: Database = Depends(get_db),
+) -> ProbeResponse:
+    """Trigger a probe-mode re-execution for the session.
+
+    Reads sampled outputs from the completed ``session.duckdb`` and re-runs
+    transform nodes with ``_row_id`` tracking, writing results to
+    ``session_probe.duckdb`` in the bundle directory.
+
+    ``probe_status`` transitions: ``null`` / ``failed`` → ``running`` → ``ready`` | ``failed``
+
+    The session must be ``active`` or ``finalized`` and must have a ``bundle_path``.
+    """
+    from pipeline_service.tasks import run_probe
+
+    row = db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    if row["status"] == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot probe a running session — wait for execution to complete first",
+        )
+    if row["status"] == "abandoned":
+        raise HTTPException(status_code=409, detail="Session has been abandoned")
+
+    bundle_path = row.get("bundle_path")
+    if not bundle_path or not Path(bundle_path).exists():
+        raise HTTPException(status_code=409, detail="Session has no bundle — run the session first")
+
+    db.update_probe_status(session_id, "running")
+
+    background_tasks.add_task(
+        run_probe,
+        session_id=session_id,
+        pipeline_yaml=row["pipeline_yaml"],
+        env_yaml=row.get("env_yaml"),
+        variables_yaml=row.get("variables_yaml"),
+        bundle_path=bundle_path,
+        db=db,
+        pipeline_path=row.get("pipeline_path"),
+        workspace=row.get("workspace"),
+        probe_rows=body.probe_rows,
+    )
+
+    return ProbeResponse(session_id=session_id, probe_status="running")
+
+
+# ---------------------------------------------------------------------------
+# GET /sessions/{id}/nodes/{node_id}/provenance — row-level lineage query
+# ---------------------------------------------------------------------------
+
+class ProvenanceRowResponse(BaseModel):
+    node_id: str
+    row_index: int
+    row_values: dict
+    opaque: bool
+
+
+@router.get(
+    "/{session_id}/nodes/{node_id}/provenance",
+    response_model=list[ProvenanceRowResponse],
+)
+def get_provenance(
+    session_id: str,
+    node_id: str,
+    output_row_id: int,
+    db: Database = Depends(get_db),
+) -> list[ProvenanceRowResponse]:
+    """Trace an output row back to its contributing source rows.
+
+    Requires a completed probe run (``probe_status == 'ready'``).
+    Returns a list of source rows; ``opaque=true`` entries indicate nodes
+    where row-level lineage could not be traced (e.g. GROUP BY).
+    """
+    from pipeline_core.lineage.provenance import get_probe_lineage, open_probe_db
+
+    row = db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    probe_status = row.get("probe_status")
+    if probe_status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Probe run not ready (status: {probe_status or 'not started'}). "
+                   "Call POST /sessions/{id}/probe first.",
+        )
+
+    bundle_path = row.get("bundle_path")
+    probe_db_path = str(Path(bundle_path) / "session_probe.duckdb")
+    if not Path(probe_db_path).exists():
+        raise HTTPException(status_code=404, detail="session_probe.duckdb not found")
+
+    try:
+        conn = open_probe_db(probe_db_path)
+        results = get_probe_lineage(conn, node_id, output_row_id)
+        conn.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Provenance query failed: {exc}")
+
+    return [
+        ProvenanceRowResponse(
+            node_id=r.node_id,
+            row_index=r.row_index,
+            row_values=r.row_values,
+            opaque=r.opaque,
+        )
+        for r in results
+    ]

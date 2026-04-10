@@ -24,6 +24,7 @@ import NodeConfigPanel from './components/NodeConfigPanel'
 import WorkspaceBar from './components/WorkspaceBar'
 import LoadPipelineModal from './components/LoadPipelineModal'
 import NewPipelineModal from './components/NewPipelineModal'
+import UberPipelineModal from './components/UberPipelineModal'
 import YamlPreviewPanel from './components/YamlPreviewPanel'
 import VariablesPanel from './components/VariablesPanel'
 import RunHistoryPanel from './components/RunHistoryPanel'
@@ -192,7 +193,7 @@ export default function App() {
     if (!pipelineFilePath) return 'Untitled'
     const parts = pipelineFilePath.replace(/\\/g, '/').split('/')
     // New layout: pipelines/{name}/pipeline.yaml → use {name}
-    const pipelinesIdx = parts.findLastIndex((p) => p.toLowerCase() === 'pipelines')
+    const pipelinesIdx = parts.reduce((last, p: string, i) => p.toLowerCase() === 'pipelines' ? i : last, -1)
     if (pipelinesIdx >= 0 && parts[pipelinesIdx + 1]) return parts[pipelinesIdx + 1]
     // Fallback: parent directory of the yaml file
     if (parts.length >= 2) return parts[parts.length - 2]
@@ -227,6 +228,7 @@ export default function App() {
   const [showRunHistory, setShowRunHistory] = useState(false)
   const [showTransformEditor, setShowTransformEditor] = useState(false)
   const [showRunVarsModal, setShowRunVarsModal] = useState(false)
+  const [showUberPipeline, setShowUberPipeline] = useState(false)
   const [yamlPreviewOpen, setYamlPreviewOpen] = useState(false)
   /** Absolute directory of the last pipeline file loaded from workspace */
   const [pipelineDir, setPipelineDir] = useState<string | null>(null)
@@ -552,6 +554,14 @@ export default function App() {
     }
   }
 
+  function handleSetTemplate(nodeId: string, templatePath: string, templateFile: string) {
+    setNodes((nds) => nds.map((n) =>
+      n.id === nodeId
+        ? { ...n, data: { ...n.data, template_path: templatePath, template_file: templateFile } }
+        : n
+    ))
+  }
+
   function handleDqChecksUpdate(nodeId: string, dq_checks: import('./types').DQCheck[]) {
     pushHistory()
     // Always update the dq_checks on the node data first
@@ -707,7 +717,7 @@ export default function App() {
     if (hasInputs && !activeSession?.bundle_path) {
       throw new Error('SQL Run requires an active session with completed upstream nodes. Start a session first (▶ Run), then use Run here.')
     }
-    const bundlePath = hasInputs ? activeSession?.bundle_path : undefined
+    const bundlePath = hasInputs ? (activeSession?.bundle_path ?? undefined) : undefined
     return previewNode(currentPipelineJson, nodeId, undefined, pipelineDir ?? undefined, 200, variablesYaml ?? undefined, workspace || undefined, bundlePath, sqlOverride)
   }
 
@@ -1240,6 +1250,7 @@ export default function App() {
           pipelineName={pipelineName}
           onToggleLineage={activeSession ? handleToggleLineage : undefined}
           lineageActive={showLineage}
+          onOpenUberPipeline={workspace ? () => setShowUberPipeline(true) : undefined}
         />
 
         {(validationErrors.length > 0 || validationWarnings.length > 0) && (
@@ -1348,6 +1359,13 @@ export default function App() {
           workspace={workspace}
           onConfirm={handleNewPipeline}
           onClose={() => setShowNewPipelineModal(false)}
+        />
+      )}
+
+      {showUberPipeline && workspace && (
+        <UberPipelineModal
+          initialWorkspaces={[workspace]}
+          onClose={() => setShowUberPipeline(false)}
         />
       )}
 

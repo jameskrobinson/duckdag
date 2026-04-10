@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { SessionNodeResponse, SessionResponse } from '../types'
-import { abandonSession, cancelSession, executeSession, finalizeSession, fetchSessionNodeOutput, rerunSessionNode } from '../api/client'
+import { abandonSession, cancelSession, executeSession, finalizeSession, fetchSessionNodeOutput, rerunSessionNode, startProbe } from '../api/client'
 import NodeOutputPreview from './NodeOutputPreview'
 
 interface SessionPanelProps {
@@ -48,6 +48,7 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
   const [rerunningNodeId, setRerunningNodeId] = useState<string | null>(null)
   const [showFinalizeConfirm, setShowFinalizeConfirm] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [probing, setProbing] = useState(false)
 
   const sessionColor = STATUS_COLOR[session.status] ?? '#6c7086'
   const nodeList = Object.values(nodeStatuses)
@@ -110,6 +111,19 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
       setActionError(e instanceof Error ? e.message : 'Re-run failed')
     } finally {
       setRerunningNodeId(null)
+    }
+  }
+
+  async function handleStartProbe() {
+    setProbing(true)
+    setActionError(null)
+    try {
+      const result = await startProbe(session.session_id)
+      onSessionUpdate({ ...session, probe_status: result.probe_status as SessionResponse['probe_status'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Probe failed')
+    } finally {
+      setProbing(false)
     }
   }
 
@@ -207,6 +221,20 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
                   >
                     {reexecuting ? '◌ Running…' : '▶ Re-execute'}
                   </button>
+                  {hasBundle && completedCount > 0 && session.probe_status !== 'running' && (
+                    <button
+                      style={{ ...styles.actionBtn, ...styles.probeBtn }}
+                      onClick={handleStartProbe}
+                      disabled={probing}
+                      title="Trace row-level lineage so you can right-click rows in previews to explain them"
+                    >
+                      {probing || session.probe_status === 'running'
+                        ? '◌ Probing…'
+                        : session.probe_status === 'ready'
+                          ? '⬡ Re-probe'
+                          : '⬡ Probe rows'}
+                    </button>
+                  )}
                   <button
                     style={{ ...styles.actionBtn, ...styles.finalizeBtn }}
                     onClick={handleFinalize}
@@ -294,6 +322,8 @@ export default function SessionPanel({ session, nodeStatuses, onDismiss, onSessi
           nodeId={previewNodeId}
           onClose={() => setPreviewNodeId(null)}
           fetchFn={fetchSessionNodeOutput}
+          sessionId={session.session_id}
+          probeStatus={session.probe_status}
         />
       )}
     </>
@@ -335,6 +365,7 @@ const styles: Record<string, React.CSSProperties> = {
   reexecuteBtn: { borderColor: '#89b4fa55', color: '#89b4fa' },
   finalizeBtn: { borderColor: '#b4befe55', color: '#b4befe' },
   abandonBtn: { color: '#f38ba8', borderColor: '#f38ba844' },
+  probeBtn: { color: '#b4befe', borderColor: '#b4befe44' },
   cancelBtn: { color: '#f9e2af', borderColor: '#f9e2af55' },
   finalizedBadge: { fontSize: 10, color: '#b4befe', fontWeight: 600, marginLeft: 'auto', flexShrink: 0 },
   branchedFrom: { fontSize: 10, color: '#cba6f7', fontFamily: 'monospace', flexShrink: 0, background: '#cba6f711', border: '1px solid #cba6f733', borderRadius: 3, padding: '1px 5px' },

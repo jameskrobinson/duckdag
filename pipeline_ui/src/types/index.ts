@@ -173,6 +173,7 @@ export interface SessionResponse {
   pipeline_path: string | null
   workspace: string | null
   branched_from: string | null
+  probe_status: 'running' | 'ready' | 'failed' | null
 }
 
 export interface SessionNodeResponse {
@@ -298,6 +299,14 @@ export interface SSASMember {
   caption: string
 }
 
+// Provenance (probe row lineage)
+export interface ProvenanceRowResponse {
+  node_id: string
+  row_index: number
+  row_values: Record<string, unknown>
+  opaque: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Shadow / sidecar node types
 // ---------------------------------------------------------------------------
@@ -376,6 +385,29 @@ export interface WorkspaceVariables {
   env: Record<string, unknown>
   variables_path: string | null
   env_path: string | null
+}
+
+// Uber pipeline — workspace-level cross-pipeline DAG
+export interface UberPipelineNode {
+  pipeline_path: string
+  pipeline_name: string
+  workspace: string
+  source_files: string[]
+  sink_files: string[]
+  last_run_status: 'completed' | 'failed' | 'running' | 'never'
+  last_run_at: string | null
+}
+
+export interface UberPipelineEdge {
+  source_pipeline: string
+  target_pipeline: string
+  shared_path: string
+  resolved: boolean
+}
+
+export interface UberPipelineResponse {
+  pipelines: UberPipelineNode[]
+  edges: UberPipelineEdge[]
 }
 
 // Node templates — pre-filled configs draggable from the palette

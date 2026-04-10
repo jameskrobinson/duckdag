@@ -12,6 +12,42 @@ from pydantic import BaseModel
 
 from pipeline_service.db import Database
 
+# ---------------------------------------------------------------------------
+# Uber-pipeline models
+# ---------------------------------------------------------------------------
+
+class UberPipelineNode(BaseModel):
+    pipeline_path: str
+    """Absolute path to the pipeline.yaml file."""
+    pipeline_name: str
+    """Human-readable name — the pipeline directory name (new layout) or file stem."""
+    workspace: str
+    """Workspace this pipeline belongs to."""
+    source_files: list[str]
+    """Resolved file paths consumed by source nodes (load_file, etc.)."""
+    sink_files: list[str]
+    """Resolved file paths produced by sink nodes (export_dta, push_duckdb, etc.)."""
+    last_run_status: str
+    """One of: completed | failed | running | never."""
+    last_run_at: str | None = None
+    """ISO-8601 UTC timestamp of the most recent session, or null."""
+
+
+class UberPipelineEdge(BaseModel):
+    source_pipeline: str
+    """pipeline_path of the pipeline that writes the shared file."""
+    target_pipeline: str
+    """pipeline_path of the pipeline that reads the shared file."""
+    shared_path: str
+    """The file path that links the two pipelines."""
+    resolved: bool
+    """False when shared_path still contains unresolved Jinja {{ }} references."""
+
+
+class UberPipelineResponse(BaseModel):
+    pipelines: list[UberPipelineNode]
+    edges: list[UberPipelineEdge]
+
 router = APIRouter()
 
 
@@ -486,3 +522,229 @@ def get_active_session(
         created_at=str(row["created_at"]),
         error=row.get("error"),
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /workspace/uber-pipeline — workspace-level cross-pipeline DAG
+# ---------------------------------------------------------------------------
+
+# Node types whose params["path"] is a file consumed as input
+_UBER_SOURCE_TYPES = frozenset({"load_file"})
+# Node types whose params["path"] is a file produced as output
+_UBER_SINK_TYPES = frozenset({"export_dta", "push_duckdb"})
+
+# Session status → simplified run status
+_SESSION_STATUS_MAP = {
+    "finalized": "completed",
+    "active": "completed",
+    "running": "running",
+    "abandoned": "never",   # treat abandoned as "never ran cleanly"
+}
+
+
+def _try_render_jinja(value: str, context: dict[str, Any]) -> str:
+    """Best-effort Jinja2 render. Returns the original string on any error."""
+    try:
+        from jinja2 import Environment, Undefined
+        env = Environment(undefined=Undefined)
+        return env.from_string(value).render(**context)
+    except Exception:
+        return value
+
+
+def _load_variables(pipeline_file: Path) -> dict[str, Any]:
+    """Load Jinja variable context for a pipeline.
+
+    Tries ``{pipeline_dir}/variables.yaml`` first, then falls back to
+    ``{workspace}/variables.yaml`` (two levels up from the pipeline file).
+    Returns an empty dict on any error.
+    """
+    candidates = [
+        pipeline_file.parent / "variables.yaml",
+        pipeline_file.parent.parent.parent / "variables.yaml",  # workspace root
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+            except Exception:
+                pass
+    return {}
+
+
+def _extract_pipeline_files(
+    raw: dict[str, Any], context: dict[str, Any]
+) -> tuple[list[str], list[str], list[bool], list[bool]]:
+    """Return (source_files, sink_files, source_is_template, sink_is_template).
+
+    Each *_is_template list has the same length as the corresponding files list.
+    An entry is True when the original path contained a Jinja {{ }} reference,
+    meaning the resolved value may be approximate if variables were missing.
+    Applies best-effort Jinja2 variable substitution using *context*.
+    """
+    sources: list[str] = []
+    sinks: list[str] = []
+    source_template_flags: list[bool] = []
+    sink_template_flags: list[bool] = []
+    for node in raw.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type", "")
+        params = node.get("params") or {}
+        path_val = params.get("path")
+        if not isinstance(path_val, str) or not path_val:
+            continue
+        is_template = "{{" in path_val
+        resolved = _try_render_jinja(path_val, context)
+        if node_type in _UBER_SOURCE_TYPES:
+            sources.append(resolved)
+            source_template_flags.append(is_template)
+        elif node_type in _UBER_SINK_TYPES:
+            sinks.append(resolved)
+            sink_template_flags.append(is_template)
+    return sources, sinks, source_template_flags, sink_template_flags
+
+
+def _normalise_path(p: str) -> str:
+    """Return a normalised, case-folded path string for matching.
+
+    Does not require the path to exist on disk.
+    """
+    try:
+        return str(Path(p).resolve()).lower()
+    except Exception:
+        return p.lower()
+
+
+@router.get("/uber-pipeline", response_model=UberPipelineResponse)
+def get_uber_pipeline(
+    workspace: list[str] = Query(..., description="Workspace directories (repeat for multiple)"),
+    db: Database = Depends(get_db),
+) -> UberPipelineResponse:
+    """Return a workspace-level cross-pipeline DAG.
+
+    Discovers all ``pipeline.yaml`` files in each workspace, extracts source
+    and sink file paths from node params, and builds edges where one pipeline's
+    sink file matches another pipeline's source file.
+
+    Last-run status is derived from the most recent non-abandoned session for
+    each pipeline_path stored in the service database.
+    """
+    # ------------------------------------------------------------------
+    # 1. Discover pipeline files across all workspaces
+    # ------------------------------------------------------------------
+    discovered: list[tuple[str, Path]] = []   # (workspace_str, pipeline_path)
+    for ws_str in workspace:
+        ws = Path(ws_str)
+        if not ws.exists() or not ws.is_dir():
+            continue
+        pipelines_dir = ws / "pipelines"
+        if pipelines_dir.exists():
+            # New layout: pipelines/*/pipeline.yaml
+            for f in sorted(pipelines_dir.rglob("pipeline.yaml")):
+                if f.is_file() and not any(
+                    part in _EXCLUDE_DIRS for part in f.relative_to(ws).parts
+                ):
+                    discovered.append((ws_str, f))
+        else:
+            # Legacy/flat layout: any pipeline.yaml at workspace root
+            for f in sorted(ws.rglob("pipeline.yaml")):
+                if f.is_file() and not any(
+                    part in _EXCLUDE_DIRS for part in f.relative_to(ws).parts
+                ):
+                    discovered.append((ws_str, f))
+
+    # ------------------------------------------------------------------
+    # 2. Parse each pipeline, extract files, fetch last-run status
+    # ------------------------------------------------------------------
+    pipeline_nodes: list[UberPipelineNode] = []
+    # Maps pipeline_path → {resolved_file_path: is_template} for source and sink files
+    _src_template_map: dict[str, dict[str, bool]] = {}
+    _sink_template_map: dict[str, dict[str, bool]] = {}
+
+    for ws_str, pipeline_file in discovered:
+        ws_path = Path(ws_str)
+        rel_parts = pipeline_file.relative_to(ws_path).parts
+        # pipeline_name: use the sub-directory name for new layout, else stem
+        if len(rel_parts) >= 2 and rel_parts[0] == "pipelines":
+            pipeline_name = rel_parts[1]
+        else:
+            pipeline_name = pipeline_file.stem
+
+        # Parse YAML (best-effort — skip on error)
+        try:
+            raw = yaml.safe_load(pipeline_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+
+        context = _load_variables(pipeline_file)
+        source_files, sink_files, src_tmpl, sink_tmpl = _extract_pipeline_files(raw, context)
+
+        # Last-run status from most recent non-abandoned session
+        pipeline_path_str = str(pipeline_file)
+        last_run_status = "never"
+        last_run_at: str | None = None
+
+        session_row = db._fetchone(
+            """
+            SELECT status, created_at FROM sessions
+            WHERE pipeline_path = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            [pipeline_path_str],
+        )
+        if session_row:
+            last_run_status = _SESSION_STATUS_MAP.get(session_row["status"], "never")
+            raw_ts = session_row["created_at"]
+            if raw_ts is not None:
+                if isinstance(raw_ts, datetime):
+                    last_run_at = raw_ts.isoformat()
+                else:
+                    last_run_at = str(raw_ts)
+
+        pipeline_nodes.append(UberPipelineNode(
+            pipeline_path=pipeline_path_str,
+            pipeline_name=pipeline_name,
+            workspace=ws_str,
+            source_files=source_files,
+            sink_files=sink_files,
+            last_run_status=last_run_status,
+            last_run_at=last_run_at,
+        ))
+        # Store template flags alongside the node for edge building
+        _src_template_map[pipeline_path_str] = dict(zip(source_files, src_tmpl))
+        _sink_template_map[pipeline_path_str] = dict(zip(sink_files, sink_tmpl))
+
+    # ------------------------------------------------------------------
+    # 3. Build cross-pipeline edges by matching sink → source paths
+    # ------------------------------------------------------------------
+    edges: list[UberPipelineEdge] = []
+
+    # Index source files: normalised_path → (pipeline_path, is_template)
+    source_index: dict[str, tuple[str, bool]] = {}
+    for node in pipeline_nodes:
+        src_flags = _src_template_map.get(node.pipeline_path, {})
+        for src in node.source_files:
+            source_index[_normalise_path(src)] = (node.pipeline_path, src_flags.get(src, False))
+
+    # For each sink, check if any other pipeline consumes that file
+    for node in pipeline_nodes:
+        sink_flags = _sink_template_map.get(node.pipeline_path, {})
+        for sink in node.sink_files:
+            norm = _normalise_path(sink)
+            match = source_index.get(norm)
+            if match is None:
+                continue
+            target_pipeline, src_is_tmpl = match
+            if target_pipeline == node.pipeline_path:
+                continue
+            sink_is_tmpl = sink_flags.get(sink, False)
+            edges.append(UberPipelineEdge(
+                source_pipeline=node.pipeline_path,
+                target_pipeline=target_pipeline,
+                shared_path=sink,
+                resolved=not (sink_is_tmpl or src_is_tmpl),
+            ))
+
+    return UberPipelineResponse(pipelines=pipeline_nodes, edges=edges)

@@ -14,6 +14,7 @@ import type {
   SSASMetadata,
   SSASMember,
   SuggestConfigResponse,
+  UberPipelineResponse,
   VariableDeclaration,
   WorkspacePipelineFile,
   WorkspaceVariables,
@@ -277,6 +278,11 @@ export function fetchWorkspaceVariables(workspace: string): Promise<WorkspaceVar
   return request<WorkspaceVariables>(`/workspace/variables?workspace=${encodeURIComponent(workspace)}`)
 }
 
+export function fetchUberPipeline(workspaces: string[]): Promise<UberPipelineResponse> {
+  const qs = workspaces.map(w => `workspace=${encodeURIComponent(w)}`).join('&')
+  return request<UberPipelineResponse>(`/workspace/uber-pipeline?${qs}`)
+}
+
 export function writeWorkspaceVariables(
   workspace: string,
   variables: Record<string, unknown>,
@@ -417,6 +423,21 @@ export function writeShadowYaml(
   return request('/workspace/shadow', {
     method: 'POST',
     body: JSON.stringify({ pipeline_path, content }),
+  })
+}
+
+export function fetchProvenance(
+  session_id: string,
+  node_id: string,
+  output_row_id: number,
+): Promise<import('../types').ProvenanceRowResponse[]> {
+  return request(`/sessions/${session_id}/nodes/${node_id}/provenance?output_row_id=${output_row_id}`)
+}
+
+export function startProbe(session_id: string, probe_rows = 50): Promise<{ session_id: string; probe_status: string }> {
+  return request(`/sessions/${session_id}/probe`, {
+    method: 'POST',
+    body: JSON.stringify({ probe_rows }),
   })
 }
 

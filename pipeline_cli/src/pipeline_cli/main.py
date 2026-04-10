@@ -6,6 +6,7 @@ Usage:
     pipeline run pipeline.yaml --env env.yaml
     pipeline run pipeline.yaml --workspace /path/to/workspace
     pipeline run pipeline.yaml --node my_node_id
+    pipeline run pipeline.yaml --from my_node_id
     pipeline run pipeline.yaml --dry-run
 """
 
@@ -20,6 +21,8 @@ import click
 
 from pipeline_core.bundle import create_bundle, finalise_bundle
 from pipeline_core.executor import execute_plan
+from pipeline_core.exporters.dagster_exporter import export_dagster
+from pipeline_core.exporters.script_exporter import export_script
 from pipeline_core.intermediate import DuckDBStore, InMemoryStore
 from pipeline_core.planner import build_plan, ExecutionPlan
 from pipeline_core.resolver import resolve_pipeline
@@ -61,6 +64,11 @@ def cli() -> None:
     help="Run only this node and its ancestors (partial execution).",
 )
 @click.option(
+    "--from", "from_node",
+    default=None,
+    help="Run from this node and all its descendants (skip upstream ancestors).",
+)
+@click.option(
     "--dry-run", is_flag=True, default=False,
     help="Validate and print the execution plan without running.",
 )
@@ -85,12 +93,18 @@ def run(
     env_yaml: Optional[Path],
     workspace: Optional[Path],
     target_node: Optional[str],
+    from_node: Optional[str],
     dry_run: bool,
     verbose: bool,
     var_overrides: tuple[str, ...],
     shadow_mode: bool,
 ) -> None:
-    """Execute a pipeline defined in PIPELINE_YAML."""
+    """Execute a pipeline defined in PIPELINE_YAML.
+
+    Use --node to run a specific node and its ancestors (partial execution).
+    Use --from to run a specific node and all its descendants (resume from a point).
+    --node and --from are mutually exclusive.
+    """
     pipeline_yaml = pipeline_yaml.resolve()
 
     # Parse --var KEY=VALUE pairs
@@ -139,8 +153,15 @@ def run(
         click.echo(f"[error] Could not build execution plan: {exc}", err=True)
         sys.exit(1)
 
+    if target_node is not None and from_node is not None:
+        click.echo("[error] --node and --from are mutually exclusive.", err=True)
+        sys.exit(1)
+
     if target_node is not None:
         plan = _filter_to_node(plan, spec, target_node)
+
+    if from_node is not None:
+        plan = _filter_from_node(plan, spec, from_node)
 
     if dry_run:
         _print_plan(plan)
@@ -225,6 +246,32 @@ def _filter_to_node(plan: ExecutionPlan, spec: PipelineSpec, target_node: str) -
     return ExecutionPlan(steps=filtered_steps)
 
 
+def _filter_from_node(plan: ExecutionPlan, spec: PipelineSpec, from_node: str) -> ExecutionPlan:
+    """Return a new plan containing only from_node and its descendants."""
+    node_map = {n.id: n for n in spec.nodes}
+    if from_node not in node_map:
+        click.echo(f"[error] Node '{from_node}' not found in pipeline.", err=True)
+        sys.exit(1)
+
+    # Build a reverse adjacency map: node_id → set of nodes that consume it
+    consumers: dict[str, set[str]] = {n.id: set() for n in spec.nodes}
+    for n in spec.nodes:
+        for inp in n.inputs:
+            consumers[inp].add(n.id)
+
+    def descendants(node_id: str, visited: set[str]) -> set[str]:
+        if node_id in visited:
+            return visited
+        visited.add(node_id)
+        for child in consumers.get(node_id, set()):
+            descendants(child, visited)
+        return visited
+
+    required = descendants(from_node, set())
+    filtered_steps = [s for s in plan.steps if s.node_id in required]
+    return ExecutionPlan(steps=filtered_steps)
+
+
 def _execute_verbose(
     plan: ExecutionPlan,
     spec: PipelineSpec,
@@ -305,6 +352,219 @@ def _print_shadow_summary(session: Session, shadow_specs: dict) -> None:
         click.echo(
             f"  {node_id:<28}  {colour}{status:<12}{reset}  "
             f"{primary:>9}  {shadow:>9}  {matched:>9}  {breach_str}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# pipeline export sub-commands
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def export() -> None:
+    """Export a pipeline to another format or orchestration platform."""
+
+
+@export.command("dagster")
+@click.argument("pipeline_yaml", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--output", "-o",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Destination .py file for the generated Dagster definitions. "
+        "Defaults to <pipeline_dir>/<pipeline_name>_dagster.py."
+    ),
+)
+@click.option(
+    "--env", "env_yaml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Environment variable overrides YAML.",
+)
+@click.option(
+    "--var", "var_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Override a pipeline variable: --var start_date=2024-01-01 (repeatable).",
+)
+def export_dagster_cmd(
+    pipeline_yaml: Path,
+    output: Optional[Path],
+    env_yaml: Optional[Path],
+    var_overrides: tuple[str, ...],
+) -> None:
+    """Generate a Dagster definitions file from PIPELINE_YAML.
+
+    Each pipeline node becomes a Dagster @asset.  SQL templates are embedded
+    as string literals; ODBC connections become ConfigurableResource classes.
+    The output file is self-contained and ready to use as a Dagster code location.
+    """
+    pipeline_yaml = pipeline_yaml.resolve()
+
+    # Parse --var overrides
+    variables: dict[str, str] | None = None
+    if var_overrides:
+        variables = {}
+        for item in var_overrides:
+            if "=" not in item:
+                click.echo(f"[error] --var must be KEY=VALUE, got: {item!r}", err=True)
+                sys.exit(1)
+            k, _, v = item.partition("=")
+            variables[k.strip()] = v
+
+    # Resolve spec
+    try:
+        spec = resolve_pipeline(pipeline_yaml, env_path=env_yaml, variables=variables)
+    except Exception as exc:
+        click.echo(f"[error] Failed to parse pipeline: {exc}", err=True)
+        sys.exit(1)
+
+    # Determine output path and pipeline name
+    pipeline_dir = pipeline_yaml.parent
+    parts = pipeline_dir.parts
+    if "pipelines" in parts:
+        pipeline_name = parts[parts.index("pipelines") + 1]
+    else:
+        pipeline_name = pipeline_dir.name or pipeline_yaml.stem
+
+    if output is None:
+        output = pipeline_dir / f"{pipeline_name}_dagster.py"
+
+    # Locate templates directory
+    templates_rel = (spec.templates.dir if spec.templates else "templates")
+    templates_dir = pipeline_dir / templates_rel
+    if not templates_dir.exists():
+        templates_dir = None  # type: ignore[assignment]
+        click.echo(
+            f"[warn] Templates directory not found: {pipeline_dir / templates_rel} — "
+            "SQL templates will be emitted as TODO stubs.",
+            err=True,
+        )
+
+    # Generate
+    try:
+        source = export_dagster(spec, pipeline_name=pipeline_name, templates_dir=templates_dir)
+    except Exception as exc:
+        click.echo(f"[error] Export failed: {exc}", err=True)
+        sys.exit(1)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(source, encoding="utf-8")
+
+    node_count = len(spec.nodes)
+    stub_types = {"load_ssas", "load_internal_api"}
+    stub_count = sum(1 for n in spec.nodes if n.type in stub_types)
+
+    click.echo(f"[ok] {output}")
+    click.echo(f"     {node_count} asset(s) generated", err=False)
+    if stub_count:
+        click.echo(
+            f"[warn] {stub_count} node(s) exported as stubs "
+            f"(load_ssas / load_internal_api require manual implementation).",
+            err=True,
+        )
+
+
+@export.command("script")
+@click.argument("pipeline_yaml", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--output", "-o",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Destination .py file for the generated script. "
+        "Defaults to <pipeline_dir>/<pipeline_name>_pipeline.py."
+    ),
+)
+@click.option(
+    "--env", "env_yaml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Environment variable overrides YAML.",
+)
+@click.option(
+    "--var", "var_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Override a pipeline variable: --var start_date=2024-01-01 (repeatable).",
+)
+def export_script_cmd(
+    pipeline_yaml: Path,
+    output: Optional[Path],
+    env_yaml: Optional[Path],
+    var_overrides: tuple[str, ...],
+) -> None:
+    """Generate a standalone Python script from PIPELINE_YAML.
+
+    Each pipeline node becomes a plain Python function, called in topological
+    order from a main() entry point.  SQL templates are embedded as string
+    literals; ODBC connections become module-level constants.  The output file
+    requires only pandas, duckdb, pyodbc (if ODBC nodes are present), and
+    requests (if REST API nodes are present) — no Dagster dependency.
+    """
+    pipeline_yaml = pipeline_yaml.resolve()
+
+    # Parse --var overrides
+    variables: dict[str, str] | None = None
+    if var_overrides:
+        variables = {}
+        for item in var_overrides:
+            if "=" not in item:
+                click.echo(f"[error] --var must be KEY=VALUE, got: {item!r}", err=True)
+                sys.exit(1)
+            k, _, v = item.partition("=")
+            variables[k.strip()] = v
+
+    # Resolve spec
+    try:
+        spec = resolve_pipeline(pipeline_yaml, env_path=env_yaml, variables=variables)
+    except Exception as exc:
+        click.echo(f"[error] Failed to parse pipeline: {exc}", err=True)
+        sys.exit(1)
+
+    # Determine output path and pipeline name
+    pipeline_dir = pipeline_yaml.parent
+    parts = pipeline_dir.parts
+    if "pipelines" in parts:
+        pipeline_name = parts[parts.index("pipelines") + 1]
+    else:
+        pipeline_name = pipeline_dir.name or pipeline_yaml.stem
+
+    if output is None:
+        output = pipeline_dir / f"{pipeline_name}_pipeline.py"
+
+    # Locate templates directory
+    templates_rel = (spec.templates.dir if spec.templates else "templates")
+    templates_dir = pipeline_dir / templates_rel
+    if not templates_dir.exists():
+        templates_dir = None  # type: ignore[assignment]
+        click.echo(
+            f"[warn] Templates directory not found: {pipeline_dir / templates_rel} — "
+            "SQL templates will be emitted as TODO stubs.",
+            err=True,
+        )
+
+    # Generate
+    try:
+        source = export_script(spec, pipeline_name=pipeline_name, templates_dir=templates_dir)
+    except Exception as exc:
+        click.echo(f"[error] Export failed: {exc}", err=True)
+        sys.exit(1)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(source, encoding="utf-8")
+
+    node_count = len(spec.nodes)
+    stub_types = {"load_ssas", "load_internal_api"}
+    stub_count = sum(1 for n in spec.nodes if n.type in stub_types)
+
+    click.echo(f"[ok] {output}")
+    click.echo(f"     {node_count} function(s) generated", err=False)
+    if stub_count:
+        click.echo(
+            f"[warn] {stub_count} node(s) exported as stubs "
+            f"(load_ssas / load_internal_api require manual implementation).",
+            err=True,
         )
 
 

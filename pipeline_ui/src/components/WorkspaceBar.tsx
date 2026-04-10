@@ -28,6 +28,8 @@ interface WorkspaceBarProps {
   /** When set, shows a lineage overlay toggle button (requires an active session). */
   onToggleLineage?: () => void
   lineageActive?: boolean
+  /** When set, shows the Uber Pipeline view button. */
+  onOpenUberPipeline?: () => void
 }
 
 /**
@@ -56,6 +58,7 @@ export default function WorkspaceBar({
   onNewPipeline,
   onToggleLineage,
   lineageActive = false,
+  onOpenUberPipeline,
 }: WorkspaceBarProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(workspace)
@@ -176,6 +179,15 @@ export default function WorkspaceBar({
             title={lineageActive ? 'Hide column lineage overlay' : 'Show column lineage overlay'}
           >
             ⊕ Lineage
+          </button>
+        )}
+        {onOpenUberPipeline && (
+          <button
+            onClick={onOpenUberPipeline}
+            style={{ ...styles.btn, ...styles.uberBtn }}
+            title="View workspace-level cross-pipeline DAG"
+          >
+            ⊞ Uber
           </button>
         )}
         <button
@@ -317,5 +329,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#89dceb22',
     border: '1px solid #89dceb66',
     color: '#89dceb',
+  },
+  uberBtn: {
+    background: '#cba6f722',
+    border: '1px solid #cba6f744',
+    color: '#cba6f7',
   },
 }
