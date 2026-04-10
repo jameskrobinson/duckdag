@@ -8,7 +8,8 @@
  * header bar before (or after) the canvas loads.
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,

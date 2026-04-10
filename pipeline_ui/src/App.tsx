@@ -554,14 +554,6 @@ export default function App() {
     }
   }
 
-  function handleSetTemplate(nodeId: string, templatePath: string, templateFile: string) {
-    setNodes((nds) => nds.map((n) =>
-      n.id === nodeId
-        ? { ...n, data: { ...n.data, template_path: templatePath, template_file: templateFile } }
-        : n
-    ))
-  }
-
   function handleDqChecksUpdate(nodeId: string, dq_checks: import('./types').DQCheck[]) {
     pushHistory()
     // Always update the dq_checks on the node data first
