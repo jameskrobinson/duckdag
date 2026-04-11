@@ -7,6 +7,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   transform: '#a6e3a1',
   sql: '#f38ba8',
   export: '#fab387',
+  ai: '#cba6f7',
 }
 
 const RUN_STATUS_BORDER: Record<string, string> = {
@@ -22,17 +23,37 @@ const RUN_STATUS_BORDER: Record<string, string> = {
  * Border and glow update to reflect run status when a pipeline is running.
  */
 export default function PipelineNode({ data, selected }: NodeProps<Node<BuilderNodeData>>) {
+  const isStub = data.node_type === 'python_stub'
   const category = getCategoryForType(data.node_type)
   const accentColor = CATEGORY_COLORS[category] ?? '#cdd6f4'
   const runStatus = data.run_status as string | undefined
   const stale = data.stale as boolean | undefined
   const varError = data.var_error as boolean | undefined
-  // Priority: running/failed > var_error (orange) > stale (amber) > completed (green)
   const runBorder = runStatus === 'running' || runStatus === 'failed'
     ? (RUN_STATUS_BORDER[runStatus] ?? undefined)
     : varError ? '#fab387'
     : stale ? '#f9e2af'
     : runStatus ? (RUN_STATUS_BORDER[runStatus] ?? undefined) : undefined
+
+  // python_stub renders as a distinct dashed-border prompt node
+  if (isStub) {
+    return (
+      <div style={{
+        ...styles.node,
+        ...styles.stubNode,
+        outline: selected ? `2px solid ${accentColor}` : 'none',
+        borderColor: selected ? accentColor : '#cba6f766',
+      }}>
+        <Handle type="target" position={Position.Left} style={styles.handle} />
+        <div style={styles.stubTypeTag}>✦ AI</div>
+        <div style={styles.stubLabel}>New Python transform</div>
+        <div style={styles.stubPrompt}>
+          Click to open config panel, then click ✦ Describe to generate this transform with AI
+        </div>
+        <Handle type="source" position={Position.Right} style={styles.handle} />
+      </div>
+    )
+  }
 
   return (
     <div style={{
@@ -92,6 +113,7 @@ export default function PipelineNode({ data, selected }: NodeProps<Node<BuilderN
 }
 
 function getCategoryForType(nodeType: string): string {
+  if (nodeType === 'python_stub') return 'ai'
   if (['load_odbc', 'load_ssas', 'load_file', 'load_duckdb', 'load_internal_api', 'load_rest_api'].includes(nodeType)) return 'load'
   if (['sql_exec', 'sql_transform'].includes(nodeType)) return 'sql'
   if (['pandas_transform'].includes(nodeType)) return 'transform'
@@ -198,5 +220,37 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 3,
     padding: '1px 4px',
     letterSpacing: '0.02em',
+  },
+  // python_stub styles
+  stubNode: {
+    border: '2px dashed #cba6f766',
+    background: '#1e1e2e',
+    minWidth: 200,
+    cursor: 'pointer',
+    boxShadow: '0 2px 12px #cba6f722',
+  },
+  stubTypeTag: {
+    fontSize: 10,
+    fontWeight: 700,
+    color: '#cba6f7',
+    background: '#cba6f722',
+    border: '1px solid #cba6f744',
+    borderRadius: 3,
+    padding: '2px 7px',
+    display: 'inline-block',
+    marginBottom: 6,
+    letterSpacing: '0.05em',
+  },
+  stubLabel: {
+    fontWeight: 700,
+    fontSize: 13,
+    color: '#cdd6f4',
+    marginBottom: 6,
+  },
+  stubPrompt: {
+    fontSize: 11,
+    color: '#6c7086',
+    fontStyle: 'italic',
+    lineHeight: 1.4,
   },
 }

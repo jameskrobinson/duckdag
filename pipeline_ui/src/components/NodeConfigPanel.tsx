@@ -59,6 +59,8 @@ interface NodeConfigPanelProps {
   onSaveShadowSpec?: (nodeId: string, spec: ShadowNodeSpec | null) => void
   /** Called when user requests diff results — fetches from last session run */
   onFetchShadowResult?: (nodeId: string) => Promise<ShadowDiffResult>
+  /** Called to open the AI Describe modal for python_stub nodes or Re-describe for generated nodes. */
+  onDescribe?: (nodeId: string) => void
   /** Height in px of any fixed ribbon at the bottom of the viewport (SessionPanel / RunPanel).
    *  The panel height is reduced by this amount so its footer is never hidden behind the ribbon. */
   bottomOffset?: number
@@ -96,6 +98,7 @@ export default function NodeConfigPanel({
   shadowSpec,
   onSaveShadowSpec,
   onFetchShadowResult,
+  onDescribe,
   bottomOffset = 0,
 }: NodeConfigPanelProps) {
   const [params, setParams] = useState<Record<string, unknown>>(data.params ?? {})
@@ -731,9 +734,22 @@ export default function NodeConfigPanel({
       </div>
 
       <div style={styles.footer}>
-        <button onClick={handleSuggest} disabled={suggesting} style={styles.aiBtn}>
-          {suggesting ? 'Thinking…' : '✦ AI suggest'}
-        </button>
+        {/* python_stub: show big Describe button; generated nodes: show Re-describe */}
+        {onDescribe && data.node_type === 'python_stub' && (
+          <button onClick={() => onDescribe(nodeId)} style={styles.describeBtn}>
+            ✦ Describe
+          </button>
+        )}
+        {onDescribe && data.node_type !== 'python_stub' && (params as Record<string, unknown>)._generated && (
+          <button onClick={() => onDescribe(nodeId)} style={styles.redescribeBtn}>
+            ✦ Re-describe
+          </button>
+        )}
+        {data.node_type !== 'python_stub' && (
+          <button onClick={handleSuggest} disabled={suggesting} style={styles.aiBtn}>
+            {suggesting ? 'Thinking…' : '✦ AI suggest'}
+          </button>
+        )}
         {producesOutput && (
           <button onClick={handleExecute} disabled={executing} style={styles.runBtn}>
             {executing ? 'Running…' : '▶ Infer schema'}
@@ -1600,6 +1616,8 @@ const styles: Record<string, React.CSSProperties> = {
   errorNote: { background: '#f38ba822', border: '1px solid #f38ba844', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#f38ba8' },
   conflictNote: { background: '#fab38722', border: '1px solid #fab38744', borderRadius: 6, padding: '8px 10px', fontSize: 11, color: '#fab387' },
   inspectingNote: { padding: '4px 14px', fontSize: 11, color: '#6c7086', fontStyle: 'italic', borderBottom: '1px solid #313244' },
+  describeBtn: { flex: '1 1 auto', minWidth: 100, background: '#cba6f722', border: '1px solid #cba6f744', color: '#cba6f7', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 12, fontWeight: 700 },
+  redescribeBtn: { flex: '0 0 auto', background: '#cba6f711', border: '1px solid #cba6f733', color: '#cba6f7', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
   aiBtn: { flex: '1 1 auto', minWidth: 80, background: '#89b4fa22', border: '1px solid #89b4fa44', color: '#89b4fa', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
   runBtn: { flex: '1 1 auto', minWidth: 90, background: '#a6e3a122', border: '1px solid #a6e3a144', color: '#a6e3a1', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },
   previewBtn: { flex: '0 0 auto', background: '#89dceb22', border: '1px solid #89dceb44', color: '#89dceb', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', fontSize: 11, fontWeight: 600 },

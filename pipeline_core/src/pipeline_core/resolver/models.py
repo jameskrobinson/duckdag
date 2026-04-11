@@ -36,6 +36,7 @@ NodeType = Literal[
     "push_duckdb",
     "export_dta",
     "load_internal_api",
+    "python_stub",
 ]
 
 

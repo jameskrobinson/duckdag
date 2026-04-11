@@ -33,6 +33,7 @@ import RunVariablesModal from './components/RunVariablesModal'
 import RunPanel from './components/RunPanel'
 import SessionPanel from './components/SessionPanel'
 import TransformEditorPanel from './components/TransformEditorPanel'
+import DescribeTransformModal from './components/DescribeTransformModal'
 import TemplateEditModal from './components/TemplateEditModal'
 import { useNodeTypes } from './hooks/useNodeTypes'
 import { useValidation } from './hooks/useValidation'
@@ -227,6 +228,7 @@ export default function App() {
   const [showLoadModal, setShowLoadModal] = useState(false)
   const [showNewPipelineModal, setShowNewPipelineModal] = useState(false)
   const [showVariablesPanel, setShowVariablesPanel] = useState(false)
+  const [describeNodeId, setDescribeNodeId] = useState<string | null>(null)
   const [showRunHistory, setShowRunHistory] = useState(false)
   const [showTransformEditor, setShowTransformEditor] = useState(false)
   const [showRunVarsModal, setShowRunVarsModal] = useState(false)
@@ -601,6 +603,46 @@ export default function App() {
         ? { ...n, data: { ...n.data, template_path: templatePath, template_file: templateFile } }
         : n
     ))
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI Describe & Generate handler
+  // ---------------------------------------------------------------------------
+
+  function handleDescribeApply(result: {
+    kind: 'new' | 'configure'
+    transform?: string
+    params?: Record<string, unknown>
+    transformPath?: string
+    functionName?: string
+    description?: string
+    code?: string
+  }) {
+    if (!describeNodeId) return
+    pushHistory()
+    const newParams: Record<string, unknown> = {
+      ...(result.params ?? {}),
+      transform: result.transform ?? '',
+      _generated: true,
+      ...(result.description ? { _description: result.description } : {}),
+      ...(result.code ? { _generated_code: result.code } : {}),
+    }
+    setNodes((nds) => nds.map((n) =>
+      n.id === describeNodeId
+        ? {
+            ...n,
+            data: {
+              ...n.data,
+              node_type: 'pandas_transform',
+              label: result.functionName ?? result.transform?.split('.').pop() ?? describeNodeId,
+              params: newParams,
+            },
+          }
+        : n
+    ))
+    // Refresh transforms so the new file appears in the palette
+    if (workspace) fetchTemplates(workspace || undefined).then(setRemoteTemplates).catch(() => {})
+    setDescribeNodeId(null)
   }
 
   // ---------------------------------------------------------------------------
@@ -1193,6 +1235,13 @@ export default function App() {
   const currentPipelineJson = useMemo(() => buildPipelineJson(nodes, edges, variableDeclarations), [nodes, edges, variableDeclarations])
   const { errors: validationErrors, warnings: validationWarnings } = useValidation(currentPipelineJson, variablesYaml ?? undefined, 800, pipelineDir, workspace, envYaml ?? undefined)
 
+  /** Merge server warnings with client-side stub warnings */
+  const allWarnings = useMemo(() => {
+    const stubNodes = nodes.filter((n) => n.data.node_type === 'python_stub')
+    const stubWarnings = stubNodes.map((n) => `Node "${n.id}" is an unresolved AI stub — open config panel and click ✦ Describe to generate it`)
+    return [...validationWarnings, ...stubWarnings]
+  }, [validationWarnings, nodes])
+
   /** Node IDs currently flagged stale on the canvas — sent to the service on re-execute */
   const staleNodeIds = useMemo(() => nodes.filter((n) => n.data.stale).map((n) => n.id), [nodes])
 
@@ -1269,12 +1318,12 @@ export default function App() {
           onOpenUberPipeline={workspace ? () => setShowUberPipeline(true) : undefined}
         />
 
-        {(validationErrors.length > 0 || validationWarnings.length > 0) && (
+        {(validationErrors.length > 0 || allWarnings.length > 0) && (
           <div style={styles.validationBanner}>
             {validationErrors.map((e, i) => (
               <span key={`e${i}`} style={styles.validationError}>⚠ {e}</span>
             ))}
-            {validationWarnings.map((w, i) => (
+            {allWarnings.map((w, i) => (
               <span key={`w${i}`} style={styles.validationWarning}>⚠ {w}</span>
             ))}
           </div>
@@ -1338,6 +1387,7 @@ export default function App() {
           onSaveShadowSpec={pipelineFilePath ? handleSaveShadowSpec : undefined}
           onFetchShadowResult={activeSession ? handleFetchShadowResult : undefined}
           bottomOffset={activeSession ? 224 : activeRun ? 44 : 0}
+          onDescribe={(id) => setDescribeNodeId(id)}
         />
       )}
 
@@ -1417,6 +1467,23 @@ export default function App() {
           onCancel={() => setShowRunVarsModal(false)}
         />
       )}
+
+      {describeNodeId && (() => {
+        const descNode = nodes.find(n => n.id === describeNodeId)
+        return descNode ? (
+          <DescribeTransformModal
+            nodeId={describeNodeId}
+            inputSchemas={getInputSchemas(describeNodeId)}
+            pipelineName={pipelineName}
+            pipelineDir={pipelineDir}
+            workspace={workspace}
+            previousDescription={descNode.data.params?._description as string | undefined}
+            previousCode={descNode.data.params?._generated_code as string | undefined}
+            onClose={() => setDescribeNodeId(null)}
+            onApply={handleDescribeApply}
+          />
+        ) : null
+      })()}
 
       {editingTemplate && (
         <TemplateEditModal

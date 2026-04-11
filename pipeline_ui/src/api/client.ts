@@ -472,3 +472,37 @@ export function patchNodeConfig(
     body: JSON.stringify({ pipeline_path: pipelinePath, params, description }),
   })
 }
+
+// ---------------------------------------------------------------------------
+// AI transform generation
+// ---------------------------------------------------------------------------
+
+export interface GenerateTransformResponse {
+  kind: 'new' | 'configure'
+  // kind == 'new'
+  function_name?: string
+  code?: string
+  suggested_filename?: string
+  // kind == 'configure'
+  transform?: string
+  params?: Record<string, unknown>
+  // both
+  explanation: string
+}
+
+export function generateTransform(req: {
+  description: string
+  input_schemas: Record<string, ColumnSchema[]>
+  output_columns?: string[]
+  pipeline_name?: string
+  node_id?: string
+  workspace_transforms?: string[]
+  pipeline_dir?: string
+  workspace?: string
+  previous_code?: string
+}): Promise<GenerateTransformResponse> {
+  return request<GenerateTransformResponse>('/ai/generate-transform', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}

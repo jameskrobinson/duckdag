@@ -356,6 +356,39 @@ function GroupBucket({
 }
 
 // ---------------------------------------------------------------------------
+// AI section — static entry for python_stub
+// ---------------------------------------------------------------------------
+
+function AISection({ expanded, onToggle }: { expanded: Set<string>; onToggle: (k: string) => void }) {
+  const sectionKey = '__ai__'
+  const isOpen = expanded.has(sectionKey)
+  return (
+    <div style={styles.bucket}>
+      <div style={styles.bucketHeader} onClick={() => onToggle(sectionKey)}>
+        <span style={{ ...styles.bucketIcon, color: '#cba6f7' }}>✦</span>
+        <span style={{ ...styles.bucketLabel, color: '#cba6f7' }}>AI</span>
+        <span style={styles.scopeCount}>1</span>
+        <span style={styles.chevron}>{isOpen ? '▾' : '▸'}</span>
+      </div>
+      {isOpen && (
+        <div
+          draggable
+          onDragStart={(e) => setDragPayload(e, 'python_stub', 'New Python transform', {})}
+          title="Drag onto canvas, connect upstream nodes, then click ✦ Describe to generate a Python transform with AI"
+          style={{ ...styles.fnRow, borderColor: '#cba6f733' }}
+        >
+          <span style={{ ...styles.fnDiamond, color: '#cba6f7' }}>✦</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ ...styles.fnLabel, color: '#cba6f7' }}>New Python transform</div>
+            <div style={{ fontSize: 10, color: '#6c7086', marginTop: 2 }}>AI-assisted generation</div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline templates section (live canvas nodes)
 // ---------------------------------------------------------------------------
 
@@ -445,7 +478,7 @@ function TagBrowser({
 // ---------------------------------------------------------------------------
 
 export default function Palette({ palette, pipelineTemplates = [], workspace, onEditTemplate, onDeleteTemplate }: PaletteProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(['__sources__', '__transforms__', '__sinks__']))
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(['__sources__', '__transforms__', '__sinks__', '__ai__']))
   const [query, setQuery] = useState('')
   const [tagMode, setTagMode] = useState(false)
   const [tags, setTags] = useState<PaletteTagEntry[]>([])
@@ -574,6 +607,9 @@ export default function Palette({ palette, pipelineTemplates = [], workspace, on
             onEdit={onEditTemplate}
             onDelete={onDeleteTemplate}
           />
+
+          {/* AI — python_stub drag target */}
+          <AISection expanded={expanded} onToggle={toggle} />
 
           {/* Pipeline nodes (live canvas) */}
           <PipelineSection

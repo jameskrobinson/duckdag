@@ -33,7 +33,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     )
     app.state._db_path = db_path or settings.db_path
 
-    from pipeline_service.api import palette, pipelines, runs, sessions, shadow, ssas, transforms, workspace
+    from pipeline_service.api import ai, palette, pipelines, runs, sessions, shadow, ssas, transforms, workspace
 
     app.include_router(runs.router, prefix="/runs", tags=["runs"])
     app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
@@ -42,6 +42,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.include_router(workspace.router, prefix="/workspace", tags=["workspace"])
     app.include_router(palette.router, prefix="/palette", tags=["palette"])
     app.include_router(ssas.router, prefix="/ssas", tags=["ssas"])
+    app.include_router(ai.router, prefix="/ai", tags=["ai"])
     # Shadow endpoints are mounted without a prefix — paths include /workspace/shadow
     # and /sessions/{id}/nodes/{node_id}/shadow, which match existing router segments.
     app.include_router(shadow.router, tags=["shadow"])

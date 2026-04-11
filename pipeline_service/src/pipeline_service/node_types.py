@@ -657,6 +657,22 @@ NODE_TYPE_SCHEMAS: list[NodeTypeSchema] = [
         accepts_template_params=False,
         tags=["export", "duckdb", "database", "sink"],
     ),
+    NodeTypeSchema(
+        type="python_stub",
+        label="New Python transform",
+        description=(
+            "A blank Python transform node. Connect upstream nodes, then click '✦ Describe' "
+            "in the config panel to describe what this node should do. "
+            "An AI will generate a pandas_transform function for you."
+        ),
+        category="ai",
+        needs_template=False,
+        produces_output=True,
+        reads_store_inputs=True,
+        fixed_params=[],
+        accepts_template_params=False,
+        tags=["ai", "generate", "python", "transform"],
+    ),
 ]
 
 NODE_TYPE_MAP: dict[str, NodeTypeSchema] = {s.type: s for s in NODE_TYPE_SCHEMAS}

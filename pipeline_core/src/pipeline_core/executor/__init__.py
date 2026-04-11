@@ -819,6 +819,19 @@ def _handle_load_internal_api(
         store.put(node.output, result_df)
 
 
+def _handle_python_stub(
+    node: NodeSpec,
+    spec: PipelineSpec,
+    session: Session,
+    store: IntermediateStore,
+    templates_dir: Path | None,
+) -> None:
+    raise NotImplementedError(
+        f"Node '{node.id}' is a Python stub. "
+        "Open the node in the Pipeline Builder, click '✦ Describe', and generate a transform before running."
+    )
+
+
 _HANDLERS: dict[str, _Handler] = {
     "sql_exec": _handle_sql_exec,
     "sql_transform": _handle_sql_transform,
@@ -832,6 +845,7 @@ _HANDLERS: dict[str, _Handler] = {
     "push_duckdb": _handle_push_duckdb,
     "export_dta": _handle_export_dta,
     "load_internal_api": _handle_load_internal_api,
+    "python_stub": _handle_python_stub,
 }
 
 _SQL_NODE_TYPES = frozenset({"sql_transform", "sql_exec"})
